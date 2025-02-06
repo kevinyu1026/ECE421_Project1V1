@@ -1,5 +1,6 @@
 use rand::seq::SliceRandom;
-use rand::thread_rng;
+use rand::prelude::*;
+use rand::rng;
 
 #[derive(Debug, Clone)]
 pub struct Card {
@@ -8,12 +9,17 @@ pub struct Card {
 }
 
 pub struct Deck {
+    // next_card_index: i32,
+    // cards: Vec<i32>,
     cards: Vec<Card>,
     original_deck: Vec<Card>, // Store the original 52-card deck for resetting
 }
 
 impl Deck {
     // Create a new 52-card deck
+    // pub fn new() -> Deck{
+    //     Deck{next_card_index: 0, cards: (0..52).collect()}
+    // }
     pub fn new() -> Self {
         let suits = ['H', 'D', 'C', 'S']; // Hearts, Diamonds, Clubs, Spades
         let ranks = vec![
@@ -37,17 +43,32 @@ impl Deck {
     }
 
     // Shuffle the deck
+    // pub fn shuffle(&mut self){
+    //     self.cards.shuffle(&mut rng());
+    // }
     pub fn shuffle(&mut self) {
-        let mut rng = thread_rng();
-        self.cards.shuffle(&mut rng);
+        // let mut rng = thread_rng();
+        self.cards.shuffle(&mut rng());
     }
+
+
 
     // Deal one card from the top of the deck
     pub fn deal_one_card(&mut self) -> Option<Card> {
         self.cards.pop()
     }
+    // pub fn deal(&mut self) -> i32{
+    //     let card = self.cards[self.next_card_index as usize];
+    //     self.next_card_index += 1;
+    //     card
+    // }
+
 
     // Reset the deck back to the original 52 cards
+    // pub fn reset(&mut self){
+    //     self.next_card_index = 0;
+    //     self.shuffle();
+    // }
     pub fn reset(&mut self) {
         self.cards = self.original_deck.clone();
         self.shuffle();
@@ -60,4 +81,17 @@ impl Deck {
         }
     }
 }
+
+
+
+
+//usage--------------------
+// fn main() {
+//     let mut new_deck = Deck::new();
+//     new_deck.shuffle();
+//     for _ in 0..52{
+//         println!("{:?}", new_deck.deal());
+//     }
+// }
+
 

@@ -59,4 +59,13 @@ impl Lobby {
             player.ready = true;
         }
     }
+
+    async fn deal_cards(&self) {
+        let mut players = self.players.lock().await;
+        let mut deck = Card::generate_deck();
+        for player in players.iter_mut() {
+            player.hand.push(deck.pop().unwrap());
+            player.hand.push(deck.pop().unwrap());
+        }
+    }
 }
