@@ -1,6 +1,7 @@
 mod database;
 mod game;
 mod deck;
+mod lobby;
 
 use warp::Filter;
 use std::sync::Arc;
@@ -10,45 +11,13 @@ use futures_util::{ StreamExt, SinkExt };
 use tokio::sync::{ mpsc, Mutex };
 use sqlx::SqlitePool;
 use std::collections::HashMap;
-// use game::{ show_game_variants, handle_game_selection };
+use uuid::Uuid;
 use game::game_state_machine;
 use deck::{ Card, Deck };
+use tokio::time::{ sleep, Duration };
+use lobby::Lobby;
+use lobby::Player;
 
-// Define the Lobby struct
-// Lobby struct to manage players and game lobbies
-pub struct Lobby {
-    players: Mutex<HashMap<String, mpsc::UnboundedSender<Message>>>,
-    game_db: SqlitePool,
-
-}
-// Implement Lobby methods
-impl Lobby {
-    async fn new() -> Self {
-        Lobby {
-            players: Mutex::new(HashMap::new()),
-
-            game_db: SqlitePool::connect("sqlite://poker.db").await.unwrap(),
-            
-            
-        }
-    }
-    // Add player to the lobby
-    async fn add_player(&self, username: String, tx: mpsc::UnboundedSender<Message>) {
-        let mut players = self.players.lock().await;
-        players.insert(username.clone(), tx.clone());
-    }
-
-    // Broadcast a message to all players in a same lobby
-    async fn broadcast(&self, game: &String, message: String) {
-        let players = self.players.lock().await;
-        for player in players.keys() {
-            if let Some(tx) = players.get(player) {
-                let _ = tx.send(Message::text(message.clone()));
-            }
-        }
-    }
-
-}
 
 // Main function to start the server
 #[tokio::main]
@@ -69,7 +38,7 @@ async fn main() {
             ws.on_upgrade(move |socket| handle_connection(socket, db, lobby))
         );
 
-    warp::serve(register_route).run(([0, 0, 0, 0], 3030)).await;
+    warp::serve(register_route).run(([0, 0, 0, 0], 1234)).await;
 }
 
 // Helper functions to pass the database and lobby instances to the WebSocket handler
@@ -79,7 +48,6 @@ fn with_db(
     warp::any().map(move || db.clone())
 }
 
-// Helper functions to pass the lobby instance to the WebSocket handler
 fn with_lobby(
     lobby: Arc<Lobby>
 ) -> impl Filter<Extract = (Arc<Lobby>,), Error = std::convert::Infallible> + Clone {
@@ -90,20 +58,20 @@ fn with_lobby(
 async fn handle_connection(ws: WebSocket, db: Arc<Database>, lobby: Arc<Lobby>) {
     let (mut ws_tx, mut ws_rx) = ws.split();
     let (tx, mut rx) = mpsc::unbounded_channel();
-
+    let mut username_id = "".to_string(); // saving so we can match the player to the player object
+    // Spawn a task to send messages to the client
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
             let _ = ws_tx.send(msg).await;
         }
     });
+
     // Send the main menu to the client
-    let menu_msg = Message::text(
-        "Welcome to Poker! Choose an option:\n1. Login\n2. Register\n3. Exit"
-    );
-    // Send the menu message to the client
-    tx.send(menu_msg).unwrap();
+    tx.send(Message::text("Welcome to Poker!\n")).unwrap();
+
     // Handle the client's choice
     loop {
+        tx.send(Message::text("Choose an option:\n1. Login\n2. Register\n3. Quit")).unwrap();
         if let Some(Ok(msg)) = ws_rx.next().await {
             if let Ok(choice) = msg.to_str() {
                 match choice.trim() {
@@ -119,10 +87,25 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, lobby: Arc<Lobby>) 
                                         tx.send(
                                             Message::text(format!("Welcome back, {}!", username))
                                         ).unwrap();
-                                        lobby.add_player(username.clone(), tx.clone()).await;
-                                        //broadcast to all players
-                                        lobby.broadcast(&username, format!("{} has joined the lobby", username)).await;
-                                        
+
+                                        // change later, get the data of the player from db
+                                        let new_player = Player {
+                                            name: username.clone(),
+                                            id: Uuid::new_v4().to_string(),
+                                            hand: Vec::new(),
+                                            cash: 1000,
+                                            tx: tx.clone(),
+                                            state: "waiting".to_string(),
+                                            current_bet: 0,
+                                            dealer: false,
+                                            ready: false,
+                                        };
+
+                                        lobby.add_player(new_player).await;
+                                        lobby.broadcast(
+                                            format!("{} has joined the lobby!", username)
+                                        ).await;
+                                        username_id = username;
                                         break;
                                     }
                                     _ => {
@@ -143,20 +126,36 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, lobby: Arc<Lobby>) 
                                 let username = username.trim().to_string();
                                 match db.register_player(&username).await {
                                     Ok(_) => {
-                                        let success_msg = Message::text(
-                                            format!("Registration successful! Welcome, {}! You are now in the lobby.", username)
-                                        );
-                                        tx.send(success_msg).unwrap();
-                                        // Add the player to the main lobby
-                                        lobby.add_player(username.clone(), tx.clone()).await;
-                                        lobby.broadcast(&username, format!("{} has joined the lobby", username)).await;
+                                        tx.send(
+                                            Message::text(
+                                                format!("Registration successful! Welcome, {}! You are now in the lobby.", username)
+                                            )
+                                        ).unwrap();
+
+                                        let new_player = Player {
+                                            name: username.clone(),
+                                            id: Uuid::new_v4().to_string(),
+                                            hand: Vec::new(),
+                                            cash: 1000,
+                                            tx: tx.clone(),
+                                            state: "waiting".to_string(),
+                                            current_bet: 0,
+                                            dealer: false,
+                                            ready: false,
+                                        };
+
+                                        lobby.add_player(new_player).await;
+                                        lobby.broadcast(
+                                            format!("{} has joined the lobby!", username)
+                                        ).await;
+                                        username_id = username;
+
                                         break;
                                     }
                                     Err(_) => {
-                                        let error_msg = Message::text(
-                                            "Registration failed. Try again."
-                                        );
-                                        tx.send(error_msg).unwrap();
+                                        tx.send(
+                                            Message::text("Registration failed. Try again.")
+                                        ).unwrap();
                                     }
                                 }
                             }
@@ -173,11 +172,27 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, lobby: Arc<Lobby>) 
             }
         }
     }
-    game_state_machine(&lobby).await;
-    // show_game_variants(&tx).await;
-    // if let Some(Ok(game_choice_msg)) = ws_rx.next().await {
-    //     if let Ok(choice) = game_choice_msg.to_str() {
-    //         handle_game_selection(choice, &tx).await;
-    //     }
+
+    // loop for players join the lobby, once at least 2 have joined start the game
+    loop {
+        if lobby.players.lock().await.len() >= 2 {
+            // 10 second delay, allow more players to join
+            lobby.broadcast(format!("Enough players to start the game")).await;
+            for i in (1..=10).rev() {
+                lobby.broadcast(format!("Game starting in {} seconds", i)).await;
+                sleep(Duration::from_secs(1)).await;
+            }
+            break;
+        }
+    }
+
+    // change state of players in the lobby to playing
+    // for player in lobby.players.lock().await.iter() {
+    //     player.state = "playing".to_string();
     // }
+
+    // start game state machine once
+    tokio::spawn(async move {
+        game_state_machine(&lobby).await;
+    });
 }
