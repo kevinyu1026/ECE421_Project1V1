@@ -1,3 +1,5 @@
+//!
+use std::string;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use sqlx::SqlitePool;
@@ -5,7 +7,8 @@ use crate::Card;
 use crate::Deck;
 use warp::ws::Message;
 
-const MAX_PLAYER_COUNT: i32 = 5;
+// Lobby attribute definitions
+pub const MAX_PLAYER_COUNT: i32 = 5;
 const EMPTY: i32 = 0;
 const START_OF_ROUND: i32 = 1;
 const ANTE: i32 = 2;
@@ -20,17 +23,28 @@ const ANTE_ROUND: i32 = 0;
 const FIRST_ROUND: i32 = 1;
 const SECOND_ROUND: i32 = 2;
 
+// Player state definitions
+pub const READY:i32 = 0;
+const FOLDED: i32 = 1;
+const ALL_IN: i32 = 2;
+const CHECKED: i32 = 3;
+const CALLED: i32 = 4;
+const SPECTATING: i32 = 5;
+
 // Define Player struct
+#[derive(Clone)]
 pub struct Player {
     pub name: String,
     pub id: String,
     pub hand: Vec<i32>,
-    pub cash: i32,
+    pub wallet: i32,
     pub tx: mpsc::UnboundedSender<Message>,
-    pub state: String,
+    pub state: i32,
     pub current_bet: i32,
     pub dealer: bool,
     pub ready: bool,
+    pub games_played: i32,
+    pub games_won: i32,
 }
 
 
@@ -130,18 +144,27 @@ impl Lobby {
     }
 
     async fn showdown(&self) {
-        // let mut players = self.players.lock().await;
-        // let mut winning_player = &players[0];
-        // for player in players.iter() {
-        //     if player.current_bet > winning_player.current_bet {
-        //         winning_player = player;
-        //     }
-        // }
-        // for player in players {
-        //     if player.current_bet == winning_player.current_bet {
-        //         player.cash += self.pot;
-        //     }
-        // }
+        let players: Vec<Player> = self.players.lock().await.to_vec();
+        let mut winning_players: Vec<Player> = Vec::new(); // keeps track of winning players at the end, accounting for draws
+        let mut winning_hand = (0, 0); // keeps track of current highest hand, could change when incrementing between players
+        for player in players {
+            if player.state == FOLDED || player.state == SPECTATING {continue};
+            let player_hand = player.hand.clone();
+            let player_hand_type = get_hand_type(&player_hand);
+            if player_hand_type.0 > winning_hand.0 || (player_hand_type.0 == winning_hand.0 && player_hand_type.1 > winning_hand.1) {
+                winning_hand = player_hand_type;
+                winning_players.clear();
+                winning_players.push(player);
+            } else if player_hand_type.0 == winning_hand.0 && player_hand_type.1 == winning_hand.1 {
+                winning_players.push(player);
+            }
+        }
+        let winning_player_count = winning_players.len();
+        let pot_share = self.pot / winning_player_count as i32;
+        for player in winning_players {
+            let mut player = player.clone();
+            player.wallet += pot_share;
+        }
     }
 }
 
