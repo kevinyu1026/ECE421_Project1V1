@@ -17,6 +17,8 @@ use deck::{ Card, Deck };
 use tokio::time::{ sleep, Duration };
 use lobby::Lobby;
 use lobby::Player;
+use tokio_tungstenite::connect_async;
+
 
 
 // Main function to start the server
@@ -38,7 +40,7 @@ async fn main() {
             ws.on_upgrade(move |socket| handle_connection(socket, db, lobby))
         );
 
-    warp::serve(register_route).run(([0, 0, 0, 0], 1234)).await;
+    warp::serve(register_route).run(([0, 0, 0, 0], 1112)).await;
 }
 
 // Helper functions to pass the database and lobby instances to the WebSocket handler
@@ -102,10 +104,9 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, lobby: Arc<Lobby>) 
                                         };
 
                                         lobby.add_player(new_player).await;
-                                        lobby.broadcast(
-                                            format!("{} has joined the lobby!", username)
-                                        ).await;
+                                        lobby.broadcast(format!("{} has joined the lobby!", username)).await;
                                         username_id = username;
+                                        println!("{} has joined the lobby!", username_id);
                                         break;
                                     }
                                     _ => {
@@ -149,6 +150,7 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, lobby: Arc<Lobby>) 
                                             format!("{} has joined the lobby!", username)
                                         ).await;
                                         username_id = username;
+                                        println!("{} has joined the lobby!", username_id);
 
                                         break;
                                     }
@@ -166,7 +168,7 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, lobby: Arc<Lobby>) 
                         return;
                     }
                     _ => {
-                        tx.send(Message::text("Invalid option.")).unwrap();
+                        tx.send(Message::text("Ixnvalid option.")).unwrap();
                     }
                 }
             }
