@@ -178,6 +178,14 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, lobby: Arc<Lobby>) 
             }
         }
     }
+    // join player to server player list as Player object------------
+
+    // print out player options in server lobby---------
+    // list of lobbies
+    // 1. create lobby
+    // 2. join lobby
+    // 3. view stats
+    // 4. quit
     while let Some(result) = ws_rx.next().await {
         match result {
             Ok(msg) => {
@@ -192,13 +200,31 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, lobby: Arc<Lobby>) 
                             ).await;
                         }
                     }
+                // handles client response here----------------
+                
+                // CREATE LOBBY - return lobby object----------------
+                // lobby = create_lobby();
+                // join_lobby(lobby, current_player);
+
+
+                // JOINING LOBBY (EITHER EXITING OR NEWLY CREATED)---------------
+                // existing_lobby = select_lobby();
+                // if existing_lobby.state == lobby::WAITING
+                //      join_lobby(existing_lobby);
+                // else 
+                //      // tell player lobby is not joinable
+
+                // VIEW STATS------------------------
+                } else {
+                
+                    println!("Received message: {:?}", msg);
                 }
             }
             Err(e) => {
                 eprintln!("Error: {}", e);
             }
+            // print options again
         }
-        
     }
     // loop for players join the lobby, once at least 2 have joined start the game
     loop {
@@ -223,3 +249,39 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, lobby: Arc<Lobby>) 
         game_state_machine(&lobby).await;
     });
 }
+
+fn create_lobby() -> Lobby{
+    // create a new lobby object
+
+    // return lobby
+}
+
+//fn join_lobby(lobby, new_player){
+fn join_lobby() {
+    // join a lobby object
+    // lobby.add_player(player);
+
+    // while result = player.tx.recv().await {
+    //     // ......
+            // if msg.is_close() {
+            //     println!("{} has disconnected.", username_id);
+            //     lobby.remove_player(&username_id).await;
+            //     lobby.broadcast(format!("{} has left the lobby.", username_id)).await;
+            //     if lobby.state == lobby::WAITING
+            //          lobby.ready_up(None).await;
+            //     else 
+            //          player.state = lobby::EXIT;
+            //          update player stat to DB
+            //          lobby.remove_player(&username_id).await;
+            //     break;
+    //     // if result is ready_up: lobby.ready_up(player.name)
+    //     // if exit: break
+    // }
+    // return back to handle_connection()
+}
+
+fn select_lobby() -> Lobby {
+    // select a lobby object
+}
+
+async fn delete_lobby()

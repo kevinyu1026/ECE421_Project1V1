@@ -73,6 +73,11 @@ impl Lobby {
         }
     }
 
+    fn game_state_machine(){
+
+        // invoke all methods to conduct a 5 card draw game
+    }
+
     // Add player to the lobby
     pub async fn add_player(&self, player: Player) {
         let mut players = self.players.lock().await;
@@ -98,6 +103,9 @@ impl Lobby {
         if let Some(player) = players.iter_mut().find(|p| p.name == username) {
             player.ready = true;
         }
+        // iterate through players and check if all players are ready (2 or more players)
+        // if all players are ready, start the game
+        // game_state_machine();
     }
 
     async fn deal_cards(&mut self) {
@@ -165,6 +173,12 @@ impl Lobby {
             let mut player = player.clone();
             player.wallet += pot_share;
         }
+    }
+    async fn player_leave(&self, username: &str) {
+        // let mut players = self.players.lock().await;
+        // if let Some(player) = players.iter_mut().find(|p| p.name == username) {
+        //     player.state = SPECTATING;
+        // }
     }
 }
 
