@@ -1,12 +1,13 @@
 use rand::seq::SliceRandom;
 use rand::prelude::*;
 use rand::rng;
+// use dict::{ Dict };
 
-#[derive(Debug, Clone)]
-pub struct Card {
-    pub suit: char, // 'H', 'D', 'C', 'S'
-    pub rank: String, // "2" to "10", "J", "Q", "K", "A"
-}
+// #[derive(Debug, Clone)]
+// pub struct Card {
+//     pub suit: char, // 'H', 'D', 'C', 'S'
+//     pub rank: String, // "2" to "10", "J", "Q", "K", "A"
+// }
 
 #[derive (Debug, Clone)]
 pub struct Deck {
@@ -19,7 +20,7 @@ pub struct Deck {
 impl Deck {
     // Create a new 52-card deck
     pub fn new() -> Deck{
-        Deck{next_card_index: 0, cards: (0..52).collect()}
+        Deck{next_card_index: 0, cards: (0..52).collect()}        
     }
     // pub fn new() -> Self {
     //     let suits = ['H', 'D', 'C', 'S']; // Hearts, Diamonds, Clubs, Spades
@@ -36,8 +37,6 @@ impl Deck {
     //     // let mut rng = thread_rng();
     //     self.cards.shuffle(&mut rng());
     // }
-
-
 
     // Deal one card from the top of the deck
     // pub fn deal_one_card(&mut self) -> Option<Card> {
