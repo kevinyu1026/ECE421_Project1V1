@@ -14,7 +14,7 @@ pub struct Player{
     current_bet: i32,
     dealer: bool,
     ready: bool,
-
+    
 }
 
 impl Player {
