@@ -95,12 +95,14 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, lobby: Arc<Lobby>) 
                                             name: username.clone(),
                                             id: Uuid::new_v4().to_string(),
                                             hand: Vec::new(),
-                                            cash: 1000,
+                                            wallet: db.get_player_wallet(&username).await.unwrap() as i32,
                                             tx: tx.clone(),
                                             state: "waiting".to_string(),
                                             current_bet: 0,
                                             dealer: false,
                                             ready: false,
+                                            games_played: 0,
+                                            games_won: 0,
                                         };
 
                                         lobby.add_player(new_player).await;
@@ -137,12 +139,14 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, lobby: Arc<Lobby>) 
                                             name: username.clone(),
                                             id: Uuid::new_v4().to_string(),
                                             hand: Vec::new(),
-                                            cash: 1000,
+                                            wallet: 1000,
                                             tx: tx.clone(),
                                             state: "waiting".to_string(),
                                             current_bet: 0,
                                             dealer: false,
                                             ready: false,
+                                            games_played: 0,
+                                            games_won: 0,
                                         };
 
                                         lobby.add_player(new_player).await;
@@ -174,7 +178,28 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, lobby: Arc<Lobby>) 
             }
         }
     }
-
+    while let Some(result) = ws_rx.next().await {
+        match result {
+            Ok(msg) => {
+                if msg.is_close() {
+                    println!("{} has disconnected.", username_id);
+                    for player in lobby.players.lock().await.iter() {
+                        if player.name == username_id {
+                            db.update_player_stats(&player).await.unwrap();
+                            lobby.remove_player(&username_id).await;
+                            lobby.broadcast(
+                                format!("{} has left the lobby.", username_id)
+                            ).await;
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Error: {}", e);
+            }
+        }
+        
+    }
     // loop for players join the lobby, once at least 2 have joined start the game
     loop {
         if lobby.players.lock().await.len() >= 2 {

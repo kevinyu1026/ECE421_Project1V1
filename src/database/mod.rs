@@ -1,5 +1,5 @@
-//! Database module to handle player registration, player stats, and login using SQLite
-
+```//! Database module to handle player registration, player stats, and login using SQLite
+use crate::Player;
 use sqlx::{SqlitePool, Row};
 use uuid::Uuid;
 use std::sync::Arc;
@@ -10,11 +10,14 @@ pub struct PlayerStats {
     pub games_won: i32,
 }
 
-#[derive(Debug)]
-pub struct Player {
-    pub id: String,
-    pub name: String,
-}
+// #[derive(Debug)]
+// pub struct Player {
+//     pub id: String,
+//     pub name: String,
+//     pub games_played: i32,
+//     pub games_won: i32,
+//     pub wallet: i32,
+// }
 
 #[derive(Clone)]
 pub struct Database {
@@ -30,9 +33,11 @@ impl Database {
 
     pub async fn register_player(&self, name: &str) -> Result<String, sqlx::Error> {
         let id = Uuid::new_v4().to_string();
-        sqlx::query("INSERT INTO players (id, name) VALUES (?1, ?2)")
+        let wallet: u32 = 1000;
+        sqlx::query("INSERT INTO players (id, name, wallet) VALUES (?1, ?2, ?3)")
             .bind(&id)
             .bind(name)
+            .bind(&wallet)
             .execute(&*self.pool)
             .await?;
         Ok(id)
@@ -60,17 +65,26 @@ impl Database {
         })
     }
 
-    pub async fn list_players(&self) -> Result<Vec<Player>, sqlx::Error> {
-        let rows = sqlx::query("SELECT id, name FROM players")
-            .fetch_all(&*self.pool)
+    pub async fn get_player_wallet(&self, username: &str) -> Result<i32, sqlx::Error> {
+        let row = sqlx::query("SELECT wallet FROM players WHERE name = ?1")
+            .bind(username)
+            .fetch_one(&*self.pool)
             .await?;
-
-        Ok(rows
-            .into_iter()
-            .map(|row| Player {
-                id: row.get(0),
-                name: row.get(1),
-            })
-            .collect())
+        Ok(row.get(0))
     }
+
+    pub async fn update_player_stats(&self, player: &Player) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE players SET games_played = games_played + ?1, games_won = games_won + ?2, wallet = ?3 WHERE name = ?4",
+        )
+        .bind(player.games_played)
+        .bind(player.games_won)
+        .bind(player.wallet)
+        .bind(&player.name)
+        .execute(&*self.pool)
+        .await?;
+        Ok(())
+    }
+    
 }
+```
