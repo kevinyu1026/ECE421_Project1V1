@@ -15,8 +15,8 @@ use uuid::Uuid;
 use game::game_state_machine;
 use deck::{ Card, Deck };
 use tokio::time::{ sleep, Duration };
-use lobby::Lobby;
-use lobby::Player;
+use lobby::*;
+// use lobby::Player;
 use tokio_tungstenite::connect_async;
 
 
@@ -95,9 +95,9 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, lobby: Arc<Lobby>) 
                                             name: username.clone(),
                                             id: Uuid::new_v4().to_string(),
                                             hand: Vec::new(),
-                                            cash: 1000,
+                                            wallet: 1000,
                                             tx: tx.clone(),
-                                            state: "waiting".to_string(),
+                                            state: lobby::READY,
                                             current_bet: 0,
                                             dealer: false,
                                             ready: false,
@@ -139,7 +139,7 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, lobby: Arc<Lobby>) 
                                             hand: Vec::new(),
                                             cash: 1000,
                                             tx: tx.clone(),
-                                            state: "waiting".to_string(),
+                                            state: lobby::READY,
                                             current_bet: 0,
                                             dealer: false,
                                             ready: false,
