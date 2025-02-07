@@ -8,6 +8,7 @@ pub struct Card {
     pub rank: String, // "2" to "10", "J", "Q", "K", "A"
 }
 
+#[derive (Debug, Clone)]
 pub struct Deck {
     next_card_index: i32,
     cards: Vec<i32>,
