@@ -30,7 +30,7 @@ const FOLDED: i32 = 1;
 const ALL_IN: i32 = 2;
 const CHECKED: i32 = 3;
 const CALLED: i32 = 4;
-const IN_LOBBY: i32 = 5;
+pub const IN_LOBBY: i32 = 5;
 pub const IN_SERVER: i32 = 6;
 const IN_GAME: i32 = 7;
 
@@ -67,7 +67,7 @@ impl Player {
         ).await;
     }
 
-    pub async fn get_player_input(&self, username_id: String) -> String {
+    pub async fn get_player_input(&self) -> String {
         let mut return_string: String = "".to_string();
         let mut rx = self.rx.lock().await;
         while let Some(result) = rx.next().await {
@@ -75,7 +75,7 @@ impl Player {
                 Ok(msg) => {
                     if msg.is_close() {
 
-                        println!("{} has disconnected.", username_id);
+                        println!("{} has disconnected.", self.name);
                         return_string = "Disconnected".to_string();
                         break;
                     } else {
