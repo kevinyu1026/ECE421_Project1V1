@@ -3,18 +3,21 @@ mod game;
 mod deck;
 mod lobby;
 
-use tokio_tungstenite::tungstenite::handshake::server;
+use futures_util::stream::SplitStream;
+// use std::net::TcpStream;
+// use tokio_tungstenite::WebSocketStream;
+// use tokio_tungstenite::tungstenite::handshake::server;
 use warp::Filter;
 use std::sync::Arc;
 use database::Database;
 use warp::ws::{ Message, WebSocket };
 use futures_util::{ StreamExt, SinkExt };
-use tokio::sync::{ mpsc };
+use tokio::sync::mpsc;
 use sqlx::SqlitePool;
 use uuid::Uuid;
 use lobby::*;
-use deck::{ Deck };
-use tokio::time::{ sleep, Duration };
+use deck::Deck;
+// use tokio::time::{ sleep, Duration };
 
 const MAX_SERVER_PLAYER_COUNT: i32 = 100;
 
@@ -52,7 +55,7 @@ fn with_lobby(
     warp::any().map(move || lobby.clone())
 }
 
-async fn get_lobby_names(server_lobby:&Lobby) -> String {
+async fn get_lobby_names(server_lobby:Lobby) -> String {
     let lobbies = server_lobby.get_lobby_names().await;
     let mut lobby_list = String::from("\t");
     if lobby_list.is_empty() {
@@ -68,10 +71,14 @@ async fn get_lobby_names(server_lobby:&Lobby) -> String {
 
 // Handle the WebSocket connection
 async fn handle_connection(ws: WebSocket, db: Arc<Database>, server_lobby: Arc<Lobby>) {
+    
+    let mut server_lobby = Arc::try_unwrap(server_lobby).unwrap_or_else(|arc| (*arc).clone());
     let (mut ws_tx, mut ws_rx) = ws.split();
+    // let (mut ws_lobby_tx, mut ws_lobby_rx) = ws.split();
+
     let (tx, mut rx) = mpsc::unbounded_channel();
     let mut username_id = "".to_string(); // saving so we can match the player to the player object
-    let mut current_player:Player;
+    let current_player:Player;
     // Spawn a task to send messages to the client
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
@@ -108,6 +115,7 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, server_lobby: Arc<L
                                             hand: Vec::new(),
                                             wallet: db.get_player_wallet(&username).await.unwrap() as i32,
                                             tx: tx.clone(),
+                                            rx: Arc::new(tokio::sync::Mutex::new(ws_rx)),
                                             state: lobby::IN_SERVER,
                                             current_bet: 0,
                                             dealer: false,
@@ -120,7 +128,7 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, server_lobby: Arc<L
                                         server_lobby.add_player(new_player.clone()).await;
                                         server_lobby.broadcast(format!("{} has joined the server!", username)).await;
                                         username_id = username;
-                                        println!("{} has joined the server!", username_id);
+                                        println!("{} has joined the server!", username_id.clone());
                                         current_player = new_player;
                                         break;
                                     }
@@ -147,13 +155,13 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, server_lobby: Arc<L
                                                 format!("Registration successful! Welcome, {}! You are now in the Server.", username)
                                             )
                                         ).unwrap();
-
                                         let new_player = Player {
                                             name: username.clone(),
                                             id: Uuid::new_v4().to_string(),
                                             hand: Vec::new(),
                                             wallet: 1000,
                                             tx: tx.clone(),
+                                            rx: Arc::new(tokio::sync::Mutex::new(ws_rx)),
                                             state: lobby::IN_SERVER,
                                             current_bet: 0,
                                             dealer: false,
@@ -168,7 +176,7 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, server_lobby: Arc<L
                                             format!("{} has joined the server!", username)
                                         ).await;
                                         username_id = username;
-                                        println!("{} has joined the server!", username_id);
+                                        println!("{} has joined the server!", username_id.clone());
                                         current_player = new_player;
                                         break;
                                     }
@@ -183,7 +191,7 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, server_lobby: Arc<L
                     }
                     "3" => {
                         tx.send(Message::text("Goodbye!")).unwrap();
-                        server_lobby.remove_player(&username_id).await;
+                        server_lobby.remove_player(server_lobby.clone(), username_id.clone()).await;
                         return;
                     }
                     _ => {
@@ -195,7 +203,7 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, server_lobby: Arc<L
     }
     // join player to server player list as Player object------------
     // print out player options in server lobby---------
-    let lobby_names = get_lobby_names(&server_lobby).await;
+    let lobby_names = get_lobby_names(server_lobby.clone()).await;
     tx.send(Message::text(format!("
         Current Lobbies:\n
         {}\n
@@ -206,117 +214,108 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, server_lobby: Arc<L
         4. View stats:                  stats\n
         5. Quit:                        quit\n\n
     ", lobby_names))).unwrap();
-    while let Some(result) = ws_rx.next().await {
-        match result {
-            Ok(msg) => {
-                if msg.is_close() {
-                    println!("{} has disconnected.", username_id);
+    loop {
+        let result = current_player.get_player_input(username_id.clone()).await;
+        match result.as_str() {
+            "Disconnected" => {
+                server_lobby.remove_player(server_lobby.clone(), current_player.name.clone()).await;
+                current_player.clone().remove_player(server_lobby.clone(), db).await;
+                println!("{} has left the server.", username_id.clone());
+                break;
+            }
+            "Error" => {
+                eprintln!("Invalid input.");
+            }
+            _ => {
+                // handles client response here----------------
+                let choice = result.trim();
+
+
+                if choice.starts_with("lobby -c") {
+                    // CREATE LOBBY - return lobby object----------------
+                    let lobby_name_input = choice.split(" ").collect::<Vec<&str>>();
+                    if lobby_name_input.len() != 3 {
+                        tx.send(Message::text("Invalid lobby name.")).unwrap();
+                        continue;
+                    }
+                    let lobby_name = choice.split(" ").collect::<Vec<&str>>()[2];
+                    if server_lobby.lobby_exists(lobby_name.to_string()).await {
+                        tx.send(Message::text("Lobby name already exists.")).unwrap();
+                    } else {
+                        let new_lobby = Lobby::new(None, lobby_name.to_string()).await;
+                        server_lobby.add_lobby(new_lobby.clone()).await;
+                        server_lobby.broadcast(
+                            format!("{} has created a new lobby: {}", username_id.clone(), lobby_name)
+                        ).await;
+                        println!("{} has created a new lobby: {}", username_id.clone(), lobby_name);
+                    }
+                    let join_status = server_lobby.player_join_lobby(username_id.clone(), lobby_name.to_string()).await;
+                    if join_status == lobby::FAILED {
+                        tx.send(Message::text("Lobby name entered not found.")).unwrap();
+                    } else if join_status == lobby::SUCCESS {
+                        server_lobby.broadcast(format!("{} has joined lobby: {}", username_id.clone(), lobby_name)).await;
+                        join_lobby(server_lobby.clone(), current_player.clone(), db.clone()).await; // Sync function for player to be inside until they leave lobby or disconnect from server
+                    } else if join_status == lobby::SERVER_FULL {
+                        tx.send(Message::text("Lobby already full.")).unwrap();
+                    } else {
+                        tx.send(Message::text("reached.")).unwrap();
+                    }
+
+
+                } else if choice.starts_with("lobby -j") {
+                    // JOINING LOBBY (EITHER EXITING OR NEWLY CREATED)---------------
+                    let lobby_name_input = choice.split(" ").collect::<Vec<&str>>();
+                    if lobby_name_input.len() != 3 {
+                        tx.send(Message::text("Invalid lobby name.")).unwrap();
+                        continue;
+                    }
+                    let lobby_name = choice.split(" ").collect::<Vec<&str>>()[2];
+                    let join_status = server_lobby.player_join_lobby(username_id.clone(), lobby_name.to_string()).await;
+                    if join_status == lobby::FAILED {
+                        tx.send(Message::text("Lobby name entered not found.")).unwrap();
+                    } else if join_status == lobby::SUCCESS {
+                        server_lobby.broadcast(format!("{} has joined lobby: {}", username_id.clone(), lobby_name)).await;
+                        join_lobby(server_lobby.clone(), current_player.clone(), db.clone()).await; // Sync function for player to be inside until they leave lobby or disconnect from server
+                    } else if join_status == lobby::SERVER_FULL {
+                        tx.send(Message::text("Lobby already full.")).unwrap();
+                    } else {
+                        tx.send(Message::text("reached.")).unwrap();
+                    }
+
+
+                } else if choice.starts_with("lobby -s") {
+                    // SHOW EXISTING LOBBIES------------------------
+                    let lobby_names = get_lobby_names(server_lobby.clone()).await;
+                    tx.send(Message::text(format!("
+                        Current Lobbies:\n
+                        {}\n\n
+                    ", lobby_names))).unwrap();
+
+
+                } else if choice.starts_with("stats") {
+                    // VIEW STATS------------------------
+                    // let stats = db.get_player_stats(&username_id).await.unwrap();
+                    // tx.send(Message::text(format!("Stats: {:?}", stats))).unwrap();
+
+
+                } else if choice.starts_with("quit") {
+                    tx.send(Message::text("Goodbye!")).unwrap();
+                    println!("{} has left the server.", username_id.clone());
                     for player in server_lobby.players.lock().await.iter() {
                         if player.name == username_id {
                             db.update_player_stats(&player).await.unwrap();
-                            server_lobby.remove_player(&username_id).await;
+                            server_lobby.clone().remove_player(server_lobby.clone(), username_id.clone()).await;
                             server_lobby.broadcast(
-                                format!("{} has left the server.", username_id)
+                                format!("{} has left the server.", username_id.clone())
                             ).await;
                         }
                     }
-                    
+                    return;
+
+
                 } else {
-                    // handles client response here----------------
-                    if let Ok(choice) = msg.to_str() {
-                        let choice = choice.trim();
-
-
-                        if choice.starts_with("lobby -c") {
-                            // CREATE LOBBY - return lobby object----------------
-                            let lobby_name_input = choice.split(" ").collect::<Vec<&str>>();
-                            if lobby_name_input.len() != 3 {
-                                tx.send(Message::text("Invalid lobby name.")).unwrap();
-                                continue;
-                            }
-                            let lobby_name = choice.split(" ").collect::<Vec<&str>>()[2];
-                            if server_lobby.lobby_exists(lobby_name).await {
-                                tx.send(Message::text("Lobby name already exists.")).unwrap();
-                            } else {
-                                let new_lobby = Arc::new(Lobby::new(None, lobby_name.to_string()).await);
-                                server_lobby.add_lobby(new_lobby.clone()).await;
-                                server_lobby.broadcast(
-                                    format!("{} has created a new lobby: {}", username_id, lobby_name)
-                                ).await;
-                                println!("{} has created a new lobby: {}", username_id, lobby_name);
-                            }
-                            let join_status = server_lobby.player_join_lobby(&username_id, lobby_name.to_string()).await;
-                            if join_status == lobby::FAILED {
-                                tx.send(Message::text("Lobby name entered not found.")).unwrap();
-                            } else if join_status == lobby::SUCCESS {
-                                server_lobby.broadcast(format!("{} has joined lobby: {}", username_id, lobby_name)).await;
-                                join_lobby(server_lobby.clone(), current_player.clone()); // Sync function for player to be inside until they leave lobby or disconnect from server
-                            } else if join_status == lobby::SERVER_FULL {
-                                tx.send(Message::text("Lobby already full.")).unwrap();
-                            } else {
-                                tx.send(Message::text("reached.")).unwrap();
-                            }
-
-
-                        } else if choice.starts_with("lobby -j") {
-                            // JOINING LOBBY (EITHER EXITING OR NEWLY CREATED)---------------
-                            let lobby_name_input = choice.split(" ").collect::<Vec<&str>>();
-                            if lobby_name_input.len() != 3 {
-                                tx.send(Message::text("Invalid lobby name.")).unwrap();
-                                continue;
-                            }
-                            let lobby_name = choice.split(" ").collect::<Vec<&str>>()[2];
-                            let join_status = server_lobby.player_join_lobby(&username_id, lobby_name.to_string()).await;
-                            if join_status == lobby::FAILED {
-                                tx.send(Message::text("Lobby name entered not found.")).unwrap();
-                            } else if join_status == lobby::SUCCESS {
-                                join_lobby(server_lobby.clone(), current_player.clone()); // Sync function for player to be inside until they leave lobby or disconnect from server
-                                server_lobby.broadcast(format!("{} has joined lobby: {}", username_id, lobby_name)).await;
-                            } else if join_status == lobby::SERVER_FULL {
-                                tx.send(Message::text("Lobby already full.")).unwrap();
-                            } else {
-                                tx.send(Message::text("reached.")).unwrap();
-                            }
-
-
-                        } else if choice.starts_with("lobby -s") {
-                            // SHOW EXISTING LOBBIES------------------------
-                            let lobby_names = get_lobby_names(&server_lobby).await;
-                            tx.send(Message::text(format!("
-                                Current Lobbies:\n
-                                {}\n\n
-                            ", lobby_names))).unwrap();
-
-
-                        } else if choice.starts_with("stats") {
-                            // VIEW STATS------------------------
-                            // let stats = db.get_player_stats(&username_id).await.unwrap();
-                            // tx.send(Message::text(format!("Stats: {:?}", stats))).unwrap();
-
-
-                        } else if choice.starts_with("quit") {
-                            tx.send(Message::text("Goodbye!")).unwrap();
-                            println!("{} has left the server.", username_id);
-                            for player in server_lobby.players.lock().await.iter() {
-                                if player.name == username_id {
-                                    db.update_player_stats(&player).await.unwrap();
-                                    server_lobby.remove_player(&username_id).await;
-                                    server_lobby.broadcast(
-                                        format!("{} has left the server.", username_id)
-                                    ).await;
-                                }
-                            }
-                            return;
-
-
-                        } else {
-                            tx.send(Message::text("Invalid option.")).unwrap();
-                        }
-                    }
+                    tx.send(Message::text("Invalid option.")).unwrap();
                 }
-            }
-            Err(e) => {
-                eprintln!("Error: {}", e);
             }
             // print options again
         }
@@ -324,29 +323,76 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, server_lobby: Arc<L
 }
 
 
-fn join_lobby(server_lobby:Arc<Lobby>, player:Player){
-    let player_lobby = player.lobby.clone();
-    // join a lobby object
-    // lobby.add_player(player);
+async fn join_lobby(server_lobby: Lobby, mut player: Player, db: Arc<Database>) {
+    let mut player_lobby = player.lobby.clone();
+    let tx = player.tx.clone();
+    tx.send(Message::text(format!(
+        "
+        Welcome to lobby: {}\n
+        Choose an option:\n
+        1. Ready:           r\n
+        2. Show Players:    p\n
+        3. View stats:      s\n
+        4. Quit:            q\n\n
+    ",
+        player_lobby.name
+    )))
+    .unwrap();
 
-    // while result = player.tx.recv().await {
-    //     // ......
-            // if msg.is_close() {
-            //     println!("{} has disconnected.", username_id);
-            //     lobby.remove_player(&username_id).await;
-            //     lobby.broadcast(format!("{} has left the lobby.", username_id)).await;
-            //     if lobby.state == lobby::WAITING
-            //          lobby.ready_up(None).await;
-            //     else 
-            //          player.state = lobby::EXIT;
-            //          update player stat to DB
-            //          lobby.remove_player(&username_id).await;
-            //     break;
-    //     // if result is ready_up: lobby.ready_up(player.name)
-    //     // if exit: break
-    // }
-    // return back to handle_connection()
-}
+    loop {
+        let result = player.get_player_input(player.name.clone()).await;
+        if player.state == lobby::IN_LOBBY {
+            continue;
+        }
+        match result.as_str() {
+            "Disconnect" => {
+                player_lobby.remove_player(server_lobby.clone(), player.name.clone()).await;
+                player.remove_player(server_lobby.clone(), db.clone()).await;
+                println!("{} has disconnected.", player.name);
+                if player_lobby.game_state == lobby::JOINABLE {
+                    player_lobby.ready_up("".to_string()).await;
+                } else {
+                    player.state = lobby::IN_SERVER;
+                    // update player stat to DB
+                    player_lobby.remove_player(server_lobby.clone(), player.name.clone()).await;
+                }
+                break;
+            }
+            "Error" => {}
+            _ => {
+                let choice = result.trim();
+                if choice.starts_with("r") {
+                    // READY UP------------------------
+                    player.ready = true;
+                    player_lobby.ready_up(player.name.clone()).await;
+                    // if all players are ready, start game
+                    let players = player_lobby.players.lock().await;
+                    if players.iter().all(|p| p.ready) {
+                        // player_lobby.start_game().await;
+                    }
+                } else if choice.starts_with("p") {
+                    let players: String = player_lobby.get_player_names().await;
+                    tx.send(Message::text(format!("Players: {}", players)))
+                        .unwrap();
+                } else if choice.starts_with("s") {
+                    // VIEW STATS------------------------
+                    // let stats = db.get_player_stats(&username_id).await.unwrap();
+                    // tx.send(Message::text(format!("Stats: {:?}", stats))).unwrap();
+                } else if choice.starts_with("q") {
+                    // QUIT LOBBY------------------------
+                    player_lobby
+                        .remove_player(server_lobby.clone(), player.name.clone())
+                        .await;
+                    println!("{} has left the lobby.", player.name);
+                    player_lobby.remove_player(server_lobby.clone(), player.name.clone()).await;
+                    player.state = lobby::IN_SERVER;
+                    // update player stat to DB
+                    break;
+                } else {
+                    tx.send(Message::text("Invalid option.")).unwrap();
+                }
+            }
+        }
+    }
+} // return back to handle_connection()
 
-
-async fn delete_lobby(){}

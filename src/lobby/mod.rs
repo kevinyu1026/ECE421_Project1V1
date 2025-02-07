@@ -4,12 +4,13 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use sqlx::SqlitePool;
 use crate::Deck;
-use warp::ws::Message;
+use warp::{filters::ws::WebSocket, ws::Message};
+use super::*;
 
 // Lobby attribute definitions
 pub const MAX_PLAYER_COUNT: i32 = 5;
 const EMPTY: i32 = -1;
-const JOINABLE: i32 = 0;
+pub const JOINABLE: i32 = 0;
 const START_OF_ROUND: i32 = 1;
 const ANTE: i32 = 2;
 const DEAL_CARDS: i32 = 3;
@@ -29,7 +30,7 @@ const FOLDED: i32 = 1;
 const ALL_IN: i32 = 2;
 const CHECKED: i32 = 3;
 const CALLED: i32 = 4;
-const IN_LOBBY: i32 = 5;
+pub const IN_LOBBY: i32 = 5;
 pub const IN_SERVER:i32 = 6;
 
 // Method return defintions
@@ -45,13 +46,56 @@ pub struct Player {
     pub hand: Vec<i32>,
     pub wallet: i32,
     pub tx: mpsc::UnboundedSender<Message>,
+    pub rx: Arc<Mutex<SplitStream<warp::ws::WebSocket>>>,
     pub state: i32,
     pub current_bet: i32,
     pub dealer: bool,
     pub ready: bool,
     pub games_played: i32,
     pub games_won: i32,
-    pub lobby: Arc<Lobby>,
+    pub lobby: Lobby,
+}
+
+impl Player {
+    pub async fn remove_player(&self, mut server_lobby: Lobby, db: Arc<Database>) {
+        db.update_player_stats(&self).await.unwrap();
+
+        server_lobby.remove_player(server_lobby.clone(), self.name.clone()).await;
+        server_lobby.broadcast(
+            format!("{} has left the server.", self.name)
+        ).await;
+    }
+
+    pub async fn get_player_input(&self, username_id: String) -> String {
+        let mut return_string: String = "".to_string();
+        let mut rx = self.rx.lock().await;
+        while let Some(result) = rx.next().await {
+            match result {
+                Ok(msg) => {
+                    if msg.is_close() {
+
+                        println!("{} has disconnected.", username_id);
+                        return_string = "Disconnected".to_string();
+                        break;
+                    } else {
+                        // handles client response here----------------
+                        if let Ok(str_input) = msg.to_str() {
+                            return_string = str_input.to_string();
+                        } else {
+                            return_string = "Error".to_string();
+                        }
+                        break;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    return_string = "Error".to_string();
+                    break;
+                }
+            }
+        }
+        return return_string;
+    }
 }
 
 
@@ -60,7 +104,7 @@ pub struct Lobby {
     pub name: String,
     // Use Arc<Mutex<...>> so the Lobby struct can #[derive(Clone)]
     pub players: Arc<Mutex<Vec<Player>>>,
-    pub lobbies: Arc<Mutex<Vec<Arc<Lobby>>>>,
+    pub lobbies: Arc<Mutex<Vec<Lobby>>>,
     pub game_db: SqlitePool,
     deck: Deck,
     pub current_max_bet: i32,
@@ -88,28 +132,34 @@ impl Lobby {
         }
     }
 
+    
     pub fn game_state_machine(){
         // ...
     }
 
-    pub async fn add_player(&self, mut player: Player) {
+    pub async fn add_player(&mut self, mut player: Player) {
         let mut players = self.players.lock().await;
         player.state = IN_LOBBY;
+        self.current_player_count+=1;
         players.push(player);
     }
 
-    pub async fn remove_player(&self, username: &str) {
+    pub async fn remove_player(&mut self, server_lobby:Lobby, username: String) {
         let mut players = self.players.lock().await;
         players.retain(|p| p.name != username);
         println!("Player removed from {}: {}",self.name, username);
+        self.current_player_count-=1;
+        if self.current_player_count == 0{
+            server_lobby.remove_lobby(self.name.clone());
+        }
     }
 
-    pub async fn add_lobby(&self, lobby: Arc<Lobby>) {
+    pub async fn add_lobby(&self, lobby: Lobby) {
         let mut lobbies = self.lobbies.lock().await;
         lobbies.push(lobby);
     }
 
-    pub async fn remove_lobby(&self, lobby_name: &str) {
+    pub async fn remove_lobby(&self, lobby_name: String) {
         let mut lobbies = self.lobbies.lock().await;
         lobbies.retain(|l| l.name != lobby_name);
     }
@@ -119,24 +169,23 @@ impl Lobby {
         lobbies.iter().map(|l| l.name.clone()).collect()
     }
 
-    pub async fn lobby_exists(&self, lobby_name: &str) -> bool {
+    pub async fn lobby_exists(&self, lobby_name: String) -> bool {
         let lobbies = self.lobbies.lock().await;
         lobbies.iter().any(|l| l.name == lobby_name)
     }
 
-    pub async fn player_join_lobby(&self, username: &str, lobby_name: String) -> i32 {
-        let lobbies = self.lobbies.lock().await;
+    pub async fn player_join_lobby(&self, username: String, lobby_name: String) -> i32 {
+        let mut lobbies = self.lobbies.lock().await;
         println!("Lobby name entered: {}", lobby_name);
-        if let Some(lobby) = lobbies.iter().find(|l|  l.name == lobby_name) {
-            let mut players = self.players.lock().await;
+        if let Some(lobby) = lobbies.iter_mut().find(|l| l.name == lobby_name) {
+            let players = self.players.lock().await;
             if lobby.game_state == JOINABLE {
                 println!("Player username: {}", username);
                 if let Some(mut player) = players.iter().find(|p| p.name == username.to_string()).cloned() {
                     player.lobby = lobby.clone();
                     lobby.add_player(player).await;
                     return SUCCESS;
-                }
-                else {
+                } else {
                     println!("Player not found");
                 }
             } else {
@@ -146,6 +195,12 @@ impl Lobby {
         FAILED
     }
 
+    pub async fn get_player_names(&self) -> String {
+        let players = self.players.lock().await;
+        let message = players.iter().map(|p| p.name.clone()).collect::<Vec<String>>().join(", ");
+        message
+    }
+
     pub async fn broadcast(&self, message: String) {
         let players = self.players.lock().await;
         for player in players.iter() {
@@ -153,18 +208,19 @@ impl Lobby {
         }
     }
 
-    pub async fn ready_up(&self, username: &str) {
+    pub async fn ready_up(&self, username: String) {
         let mut players = self.players.lock().await;
         if let Some(player) = players.iter_mut().find(|p| p.name == username) {
             player.ready = true;
         }
     }
+    
 }
 
 
 fn get_hand_type(hand: &[i32]) -> (i32, i32, i32, i32, i32, i32) {
     assert!(hand.len() == 5);
-
+    
     let mut ranks: Vec<i32> = hand.iter().map(|&card| if card % 13 != 0 { card % 13 } else { 13 }).collect();
     ranks.sort();
 
