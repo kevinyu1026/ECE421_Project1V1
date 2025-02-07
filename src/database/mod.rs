@@ -1,4 +1,4 @@
-```//! Database module to handle player registration, player stats, and login using SQLite
+//! Database module to handle player registration, player stats, and login using SQLite
 use crate::Player;
 use sqlx::{SqlitePool, Row};
 use uuid::Uuid;
@@ -87,4 +87,3 @@ impl Database {
     }
     
 }
-```
