@@ -215,7 +215,7 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, server_lobby: Arc<L
         5. Quit:                        quit\n\n
     ", lobby_names))).unwrap();
     loop {
-        let result = current_player.get_player_input(username_id.clone()).await;
+        let result = current_player.get_player_input().await;
         match result.as_str() {
             "Disconnected" => {
                 server_lobby.remove_player(server_lobby.clone(), current_player.name.clone()).await;
@@ -340,7 +340,7 @@ async fn join_lobby(server_lobby: Lobby, mut player: Player, db: Arc<Database>) 
     .unwrap();
 
     loop {
-        let result = player.get_player_input(player.name.clone()).await;
+        let result = player.get_player_input().await;
         if player.state == lobby::IN_LOBBY {
             continue;
         }
