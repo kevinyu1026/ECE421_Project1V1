@@ -7,7 +7,7 @@ use warp::Filter;
 use std::sync::Arc;
 use database::Database;
 use warp::ws::{ Message, WebSocket };
-use futures_util::{ StreamExt, SinkExt };
+use futures_util::{ StreamExt, SinkExt, FutureExt };
 use tokio::sync::{ mpsc, Mutex };
 use sqlx::SqlitePool;
 use std::collections::HashMap;
@@ -178,9 +178,10 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, lobby: Arc<Lobby>) 
             }
         }
     }
-    while let Some(result) = ws_rx.next().await {
+    // while let Some(result) = ws_rx.next().await {
+    while let Some(result) = ws_rx.next().now_or_never() {
         match result {
-            Ok(msg) => {
+            Some(Ok(msg)) => {
                 if msg.is_close() {
                     println!("{} has disconnected.", username_id);
                     for player in lobby.players.lock().await.iter() {
@@ -194,11 +195,13 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, lobby: Arc<Lobby>) 
                     }
                 }
             }
-            Err(e) => {
+            Some(Err(e)) => {
                 eprintln!("Error: {}", e);
             }
+            None => {
+                continue;
+            }
         }
-        
     }
     // loop for players join the lobby, once at least 2 have joined start the game
     loop {
