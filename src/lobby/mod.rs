@@ -191,7 +191,6 @@ impl Lobby {
                     lobby.add_player(player).await;
                     return SUCCESS;
                 } else {
-                } else {
                     println!("Player not found");
                 }
             } else {
