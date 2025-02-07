@@ -3,6 +3,7 @@ mod game;
 mod deck;
 mod lobby;
 
+use tokio_tungstenite::tungstenite::handshake::server;
 use warp::Filter;
 use std::sync::Arc;
 use database::Database;
@@ -107,13 +108,13 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, server_lobby: Arc<L
                                             hand: Vec::new(),
                                             wallet: db.get_player_wallet(&username).await.unwrap() as i32,
                                             tx: tx.clone(),
-                                            state: lobby::READY,
+                                            state: lobby::IN_SERVER,
                                             current_bet: 0,
                                             dealer: false,
                                             ready: false,
                                             games_played: 0,
                                             games_won: 0,
-                                            lobby_name: "Server Lobby".to_string(),
+                                            lobby: server_lobby.clone(),
                                         };
 
                                         server_lobby.add_player(new_player.clone()).await;
@@ -153,13 +154,13 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, server_lobby: Arc<L
                                             hand: Vec::new(),
                                             wallet: 1000,
                                             tx: tx.clone(),
-                                            state: lobby::READY,
+                                            state: lobby::IN_SERVER,
                                             current_bet: 0,
                                             dealer: false,
                                             ready: false,
                                             games_played: 0,
                                             games_won: 0,
-                                            lobby_name: "Server Lobby".to_string(),
+                                            lobby: server_lobby.clone(),
                                         };
 
                                         server_lobby.add_player(new_player.clone()).await;
@@ -249,7 +250,7 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, server_lobby: Arc<L
                                 tx.send(Message::text("Lobby name entered not found.")).unwrap();
                             } else if join_status == lobby::SUCCESS {
                                 server_lobby.broadcast(format!("{} has joined lobby: {}", username_id, lobby_name)).await;
-                                join_lobby(server_lobby.clone(), lobby_name, current_player.clone()).await; // Clone server_lobby here
+                                join_lobby(server_lobby.clone(), current_player.clone()); // Sync function for player to be inside until they leave lobby or disconnect from server
                             } else if join_status == lobby::SERVER_FULL {
                                 tx.send(Message::text("Lobby already full.")).unwrap();
                             } else {
@@ -269,6 +270,7 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, server_lobby: Arc<L
                             if join_status == lobby::FAILED {
                                 tx.send(Message::text("Lobby name entered not found.")).unwrap();
                             } else if join_status == lobby::SUCCESS {
+                                join_lobby(server_lobby.clone(), current_player.clone()); // Sync function for player to be inside until they leave lobby or disconnect from server
                                 server_lobby.broadcast(format!("{} has joined lobby: {}", username_id, lobby_name)).await;
                             } else if join_status == lobby::SERVER_FULL {
                                 tx.send(Message::text("Lobby already full.")).unwrap();
@@ -306,7 +308,7 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, server_lobby: Arc<L
                             }
                             return;
 
-                            
+
                         } else {
                             tx.send(Message::text("Invalid option.")).unwrap();
                         }
@@ -319,39 +321,11 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, server_lobby: Arc<L
             // print options again
         }
     }
-    // loop for players join the lobby, once at least 2 have joined start the game
-    // loop {
-    //     if lobby.players.lock().await.len() >= 2 {
-    //         // 10 second delay, allow more players to join
-    //         lobby.broadcast(format!("Enough players to start the game")).await;
-    //         for i in (1..=10).rev() {
-    //             lobby.broadcast(format!("Game starting in {} seconds", i)).await;
-    //             sleep(Duration::from_secs(1)).await;
-    //         }
-    //         break;
-    //     }
-    // }
-
-    // change state of players in the lobby to playing
-    // for player in lobby.players.lock().await.iter() {
-    //     player.state = "playing".to_string();
-    // }
-
-    // start game state machine once
-    // tokio::spawn(async move {
-    //     game_state_machine(&lobby).await;
-    // });
 }
 
-fn create_lobby(){
-    // fn create_lobby() -> Lobby {
-    // create a new lobby object
 
-    // return lobby
-}
-
-async fn join_lobby(server_lobby:Arc<Lobby>, lobby:&str, new_player:Player){
-// fn join_lobby() {
+fn join_lobby(server_lobby:Arc<Lobby>, player:Player){
+    let player_lobby = player.lobby.clone();
     // join a lobby object
     // lobby.add_player(player);
 
@@ -374,9 +348,5 @@ async fn join_lobby(server_lobby:Arc<Lobby>, lobby:&str, new_player:Player){
     // return back to handle_connection()
 }
 
-// fn select_lobby() -> Lobby {
-fn select_lobby(){
-    // select a lobby object
-}
 
 async fn delete_lobby(){}

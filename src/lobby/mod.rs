@@ -30,6 +30,7 @@ const ALL_IN: i32 = 2;
 const CHECKED: i32 = 3;
 const CALLED: i32 = 4;
 const IN_LOBBY: i32 = 5;
+pub const IN_SERVER:i32 = 6;
 
 // Method return defintions
 pub const SUCCESS: i32 = 100;
@@ -50,7 +51,7 @@ pub struct Player {
     pub ready: bool,
     pub games_played: i32,
     pub games_won: i32,
-    pub lobby_name: String,
+    pub lobby: Arc<Lobby>,
 }
 
 
@@ -131,7 +132,7 @@ impl Lobby {
             if lobby.game_state == JOINABLE {
                 println!("Player username: {}", username);
                 if let Some(mut player) = players.iter().find(|p| p.name == username.to_string()).cloned() {
-                    player.lobby_name = lobby_name.to_string();
+                    player.lobby = lobby.clone();
                     lobby.add_player(player).await;
                     return SUCCESS;
                 }
