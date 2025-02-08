@@ -142,7 +142,7 @@ impl Lobby {
         println!("Player removed from {}: {}", self.name, username);
         self.current_player_count -= 1;
         if self.current_player_count == 0 {
-            server_lobby.remove_lobby(self.name.clone());
+            server_lobby.remove_lobby(self.name.clone()).await;
         }
     }
 
