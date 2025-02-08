@@ -38,6 +38,9 @@ const IN_GAME: i32 = 7;
 pub const SUCCESS: i32 = 100;
 pub const FAILED: i32 = 101;
 pub const SERVER_FULL: i32 = 102;
+pub const GAME_LOBBY_EMPTY: i32 = 103;
+pub const GAME_LOBBY_NOT_EMPTY: i32 = 104;
+
 
 // Define Player struct
 #[derive(Clone)]
@@ -61,23 +64,26 @@ impl Player {
     pub async fn remove_player(&self, mut server_lobby: Lobby, db: Arc<Database>) {
         db.update_player_stats(&self).await.unwrap();
 
-        server_lobby.remove_player(server_lobby.clone(), self.name.clone()).await;
+        server_lobby.remove_player(self.name.clone()).await;
         server_lobby.broadcast(
             format!("{} has left the server.", self.name)
         ).await;
     }
 
-    pub async fn get_player_input(&self) -> String {
+    pub async fn get_player_input(&mut self) -> String {
         let mut return_string: String = "".to_string();
         let mut rx = self.rx.lock().await;
         while let Some(result) = rx.next().await {
             match result {
                 Ok(msg) => {
                     if msg.is_close() {
-
                         println!("{} has disconnected.", self.name);
-                        return_string = "Disconnected".to_string();
-                        break;
+                        self.lobby
+                            .remove_player(self.name.clone())
+                            .await;
+                        println!("{} has left the lobby.", self.name);
+                        self.lobby.remove_player(self.name.clone()).await;
+                        self.state = IN_SERVER;
                     } else {
                         // handles client response here----------------
                         if let Ok(str_input) = msg.to_str() {
@@ -85,17 +91,32 @@ impl Player {
                         } else {
                             return_string = "Error".to_string();
                         }
-                        break;
+                        return return_string;
                     }
                 }
                 Err(e) => {
                     eprintln!("Error: {}", e);
                     return_string = "Error".to_string();
-                    break;
+                    return return_string;
                 }
             }
         }
-        return return_string;
+        return_string
+    }
+
+    pub async fn player_join_lobby(&mut self, server_lobby: Lobby, lobby_name: String) -> i32 {
+        let mut lobbies = server_lobby.lobbies.lock().await;
+        println!("Lobby name entered: {}", lobby_name);
+        if let Some(lobby) = lobbies.iter_mut().find(|l| l.name == lobby_name) {
+            if lobby.game_state == JOINABLE {
+                lobby.players.lock().await.push(self.clone());
+                self.lobby = lobby.clone();
+                return SUCCESS;
+            } else {
+                return SERVER_FULL;
+            }
+        }
+        FAILED
     }
 }
 
@@ -141,14 +162,15 @@ impl Lobby {
         players.push(player);
     }
 
-    pub async fn remove_player(&mut self, server_lobby:Lobby, username: String) {
+    pub async fn remove_player(&mut self, username: String) -> i32{
         let mut players = self.players.lock().await;
         players.retain(|p| p.name != username);
         println!("Player removed from {}: {}",self.name, username);
         self.current_player_count-=1;
         if self.current_player_count == 0{
-            server_lobby.remove_lobby(self.name.clone());
+            return GAME_LOBBY_EMPTY;
         }
+        GAME_LOBBY_NOT_EMPTY
     }
 
     pub async fn add_lobby(&self, lobby: Lobby) {
@@ -172,32 +194,6 @@ impl Lobby {
     pub async fn lobby_exists(&self, lobby_name: String) -> bool {
         let lobbies = self.lobbies.lock().await;
         lobbies.iter().any(|l| l.name == lobby_name)
-    }
-
-    pub async fn player_join_lobby(&self, username: String, lobby_name: String) -> i32 {
-        let mut lobbies = self.lobbies.lock().await;
-        println!("Lobby name entered: {}", lobby_name);
-        if let Some(lobby) = lobbies.iter_mut().find(|l| l.name == lobby_name) {
-            let players = self.players.lock().await;
-            if lobby.game_state == JOINABLE {
-                println!("Player username: {}", username);
-                if
-                    let Some(mut player) = players
-                        .iter()
-                        .find(|p| p.name == username.to_string())
-                        .cloned()
-                {
-                    player.lobby = lobby.clone();
-                    lobby.add_player(player).await;
-                    return SUCCESS;
-                } else {
-                    println!("Player not found");
-                }
-            } else {
-                return SERVER_FULL;
-            }
-        }
-        FAILED
     }
 
     pub async fn get_player_names(&self) -> String {
@@ -229,108 +225,108 @@ impl Lobby {
         }
     }
 
-    async fn betting_round(&mut self, round: i32) {
-        let mut players = self.players.lock().await;
-        self.current_max_bet = 0;
+    // async fn betting_round(&mut self, round: i32) {
+    //     let mut players = self.players.lock().await;
+    //     self.current_max_bet = 0;
         
-        // ensure all players have current_bet set to 0
-        for player in players.iter_mut() {
-            player.current_bet = 0;
-        }
-        let mut current_player_index = self.first_betting_player;
-        let mut current_bet = 0;
-        let mut players_remaining = self.current_player_count;
+    //     // ensure all players have current_bet set to 0
+    //     for player in players.iter_mut() {
+    //         player.current_bet = 0;
+    //     }
+    //     let mut current_player_index = self.first_betting_player;
+    //     let mut current_bet = 0;
+    //     let mut players_remaining = self.current_player_count;
 
-        while players_remaining > 1 {
-            let player = &mut players[current_player_index as usize];
+    //     while players_remaining > 1 {
+    //         let player = &mut players[current_player_index as usize];
 
-            let mut message = format!(
-                "{{\"action\": \"bet\", \"current_bet\": {}, \"pot\": {}}}",
-                player.current_bet,
-                self.pot
-            );
-            if round == ANTE_ROUND {
-                if player.wallet > 10 {
-                    self.pot += 10;
-                    player.wallet -= 10;
-                    player.current_bet += 10;
-                }
-            } else {
-                let _ = player.tx.send(Message::text(message));
-                if let Some(Ok(response_msg)) = player.tx.recv().await {
-                    if let Ok(response_str) = response_msg.to_str() {
-                        if
-                            let Ok(response) =
-                                serde_json::from_str::<serde_json::Value>(response_str)
-                        {
-                            if let Some(action) = response["action"].as_str() {
-                                match action {
-                                    "fold" => {
-                                        players_remaining -= 1;
-                                    }
-                                    "call" => {
-                                        let call_amount = self.current_max_bet - player.current_bet;
-                                        if call_amount > player.wallet {
-                                            player.wallet = 0;
-                                            player.current_bet += call_amount;
-                                            self.pot += call_amount;
-                                        } else {
-                                            player.wallet -= call_amount;
-                                            player.current_bet += call_amount;
-                                            self.pot += call_amount;
-                                        }
-                                    }
-                                    "raise" => {
-                                        if let Some(bet) = response["bet"].as_i64() {
-                                            let bet = bet as i32;
-                                            if bet > player.wallet {
-                                                player.tx
-                                                    .send(
-                                                        Message::text(
-                                                            "Invalid bet: not enough cash."
-                                                        )
-                                                    )
-                                                    .ok();
-                                            } else {
-                                                player.wallet -= bet;
-                                                player.current_bet += bet;
-                                                self.pot += bet;
-                                                self.current_max_bet = player.current_bet;
-                                            }
-                                        }
-                                    }
-                                    "all-in" => {
-                                        let all_in_amount = player.wallet;
-                                        player.current_bet += all_in_amount;
-                                        self.pot += all_in_amount;
-                                        player.wallet = 0;
-                                        self.current_max_bet = player.current_bet;
-                                    }
-                                    "check" => {
-                                        if player.current_bet < self.current_max_bet {
-                                            player.tx
-                                                .send(
-                                                    Message::text(
-                                                        "Invalid move: You can't check, there's a bet to call."
-                                                    )
-                                                )
-                                                .ok();
-                                        }
-                                    }
-                                    _ => {
-                                        player.tx.send(Message::text("Invalid action.")).ok();
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+    //         let mut message = format!(
+    //             "{{\"action\": \"bet\", \"current_bet\": {}, \"pot\": {}}}",
+    //             player.current_bet,
+    //             self.pot
+    //         );
+    //         if round == ANTE_ROUND {
+    //             if player.wallet > 10 {
+    //                 self.pot += 10;
+    //                 player.wallet -= 10;
+    //                 player.current_bet += 10;
+    //             }
+    //         } else {
+    //             let _ = player.tx.send(Message::text(message));
+    //             if let Some(Ok(response_msg)) = player.tx.recv().await {
+    //                 if let Ok(response_str) = response_msg.to_str() {
+    //                     if
+    //                         let Ok(response) =
+    //                             serde_json::from_str::<serde_json::Value>(response_str)
+    //                     {
+    //                         if let Some(action) = response["action"].as_str() {
+    //                             match action {
+    //                                 "fold" => {
+    //                                     players_remaining -= 1;
+    //                                 }
+    //                                 "call" => {
+    //                                     let call_amount = self.current_max_bet - player.current_bet;
+    //                                     if call_amount > player.wallet {
+    //                                         player.wallet = 0;
+    //                                         player.current_bet += call_amount;
+    //                                         self.pot += call_amount;
+    //                                     } else {
+    //                                         player.wallet -= call_amount;
+    //                                         player.current_bet += call_amount;
+    //                                         self.pot += call_amount;
+    //                                     }
+    //                                 }
+    //                                 "raise" => {
+    //                                     if let Some(bet) = response["bet"].as_i64() {
+    //                                         let bet = bet as i32;
+    //                                         if bet > player.wallet {
+    //                                             player.tx
+    //                                                 .send(
+    //                                                     Message::text(
+    //                                                         "Invalid bet: not enough cash."
+    //                                                     )
+    //                                                 )
+    //                                                 .ok();
+    //                                         } else {
+    //                                             player.wallet -= bet;
+    //                                             player.current_bet += bet;
+    //                                             self.pot += bet;
+    //                                             self.current_max_bet = player.current_bet;
+    //                                         }
+    //                                     }
+    //                                 }
+    //                                 "all-in" => {
+    //                                     let all_in_amount = player.wallet;
+    //                                     player.current_bet += all_in_amount;
+    //                                     self.pot += all_in_amount;
+    //                                     player.wallet = 0;
+    //                                     self.current_max_bet = player.current_bet;
+    //                                 }
+    //                                 "check" => {
+    //                                     if player.current_bet < self.current_max_bet {
+    //                                         player.tx
+    //                                             .send(
+    //                                                 Message::text(
+    //                                                     "Invalid move: You can't check, there's a bet to call."
+    //                                                 )
+    //                                             )
+    //                                             .ok();
+    //                                     }
+    //                                 }
+    //                                 _ => {
+    //                                     player.tx.send(Message::text("Invalid action.")).ok();
+    //                                 }
+    //                             }
+    //                         }
+    //                     }
+    //                 }
+    //             }
+    //         }
 
-            // Move to next player
-            current_player_index = (current_player_index + 1) % self.current_player_count;
-        }
-    }
+    //         // Move to next player
+    //         current_player_index = (current_player_index + 1) % self.current_player_count;
+    //     }
+    // }
 
     async fn showdown(&self) {
         let players: Vec<Player> = self.players.lock().await.to_vec();
@@ -415,60 +411,60 @@ impl Lobby {
         }
     }
 
-    pub fn start_game(&mut self) {
-        // change lobby state first so nobody can try to join anymore
-        self.game_state = START_OF_ROUND;
-        self.change_player_state(IN_GAME);
-        self.game_state_machine();
-    }
+    // pub fn start_game(&mut self) {
+    //     // change lobby state first so nobody can try to join anymore
+    //     self.game_state = START_OF_ROUND;
+    //     self.change_player_state(IN_GAME);
+    //     self.game_state_machine();
+    // }
 
     
 
-    fn game_state_machine(&self) {
-        loop {
-            match self.game_state {
-                _ if self.game_state < 0 || self.game_state > 9 => {
-                    panic!("Invalid game state: {}", self.game_state);
-                }
-                START_OF_ROUND => {
-                    self.game_state = ANTE;
-                }
-                ANTE => {
-                    self.broadcast("Ante round!\nEveryone adds $10 to the pot.".to_string());
-                    self.betting_round(ANTE_ROUND);
-                    self.broadcast(format!("Current pot: {}", self.pot));
-                    self.game_state = DEAL_CARDS;
-                }
-                DEAL_CARDS => {
-                    self.broadcast("Dealing cards...".to_string());
-                    self.deal_cards();
-                    // display each players hands to them
-                    self.display_hand();
-                    self.game_state = FIRST_BETTING_ROUND;
-                }
-                FIRST_BETTING_ROUND => {
-                    self.broadcast("First betting round!".to_string());
-                    self.betting_round(FIRST_BETTING_ROUND);
-                    self.game_state = DRAW;
-                }
-                DRAW => {
-                    self.game_state = SECOND_BETTING_ROUND;
-                }
-                SECOND_BETTING_ROUND => {
-                    self.game_state = SHOWDOWN;
-                }
-                SHOWDOWN => {
-                    self.game_state = END_OF_ROUND;
-                }
-                END_OF_ROUND => {
-                    self.game_state = UPDATE_DB;
-                }
-                UPDATE_DB => {
-                    self.game_state = JOINABLE;
-                }
-            }
-        }
-    }
+    // fn game_state_machine(&self) {
+    //     loop {
+    //         match self.game_state {
+    //             _ if self.game_state < 0 || self.game_state > 9 => {
+    //                 panic!("Invalid game state: {}", self.game_state);
+    //             }
+    //             START_OF_ROUND => {
+    //                 self.game_state = ANTE;
+    //             }
+    //             ANTE => {
+    //                 self.broadcast("Ante round!\nEveryone adds $10 to the pot.".to_string());
+    //                 self.betting_round(ANTE_ROUND);
+    //                 self.broadcast(format!("Current pot: {}", self.pot));
+    //                 self.game_state = DEAL_CARDS;
+    //             }
+    //             DEAL_CARDS => {
+    //                 self.broadcast("Dealing cards...".to_string());
+    //                 self.deal_cards();
+    //                 // display each players hands to them
+    //                 self.display_hand();
+    //                 self.game_state = FIRST_BETTING_ROUND;
+    //             }
+    //             FIRST_BETTING_ROUND => {
+    //                 self.broadcast("First betting round!".to_string());
+    //                 self.betting_round(FIRST_BETTING_ROUND);
+    //                 self.game_state = DRAW;
+    //             }
+    //             DRAW => {
+    //                 self.game_state = SECOND_BETTING_ROUND;
+    //             }
+    //             SECOND_BETTING_ROUND => {
+    //                 self.game_state = SHOWDOWN;
+    //             }
+    //             SHOWDOWN => {
+    //                 self.game_state = END_OF_ROUND;
+    //             }
+    //             END_OF_ROUND => {
+    //                 self.game_state = UPDATE_DB;
+    //             }
+    //             UPDATE_DB => {
+    //                 self.game_state = JOINABLE;
+    //             }
+    //         }
+    //     }
+    // }
 }
 
 fn get_hand_type(hand: &[i32]) -> (i32, i32, i32, i32, i32, i32) {
