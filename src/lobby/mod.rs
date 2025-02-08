@@ -76,13 +76,47 @@ impl Player {
             match result {
                 Ok(msg) => {
                     if msg.is_close() {
+                        // handle all cases of disconnection here during game---------------------
                         println!("{} has disconnected.", self.name);
+                        match self.state {
+                            IN_GAME => {
+                                self.state = IN_LOBBY;
+                            },
+                            ANTE => {
+                                self.state = FOLDED;
+                            },
+                            DEAL_CARDS => {
+                                self.state = FOLDED;
+                            },
+                            FIRST_BETTING_ROUND => {
+                                self.state = FOLDED;
+
+                            },
+                            DRAW => {
+                                self.state = FOLDED;
+
+                            },
+                            SECOND_BETTING_ROUND => {
+                                self.state = FOLDED;
+                            },
+                            _ => {
+                                self.lobby
+                                    .remove_player(self.name.clone())
+                                    .await;
+                                println!("{} has left the lobby.", self.name);
+                                self.lobby.remove_player(self.name.clone()).await;
+                                self.state = IN_SERVER;
+                            }
+
+                        }
                         self.lobby
                             .remove_player(self.name.clone())
                             .await;
                         println!("{} has left the lobby.", self.name);
                         self.lobby.remove_player(self.name.clone()).await;
                         self.state = IN_SERVER;
+
+                        return "Disconnected".to_string(); // pass flag back
                     } else {
                         // handles client response here----------------
                         if let Ok(str_input) = msg.to_str() {
@@ -236,7 +270,7 @@ impl Lobby {
 
         while players_remaining > 1 {
             let player = &mut players[current_player_index as usize];
-            if player.state == FOLDED || player.state == ALL_IN{
+            if player.state == FOLDED || player.state == ALL_IN {
                 current_player_index = (current_player_index + 1) % self.current_player_count;
                 continue;
             }
@@ -252,7 +286,7 @@ impl Lobby {
                 }
             } else {
                 let message = format!(
-                    "Choose an option:\n1. Check\n2. Bet\n3. Call\n4. Fold\n5. All-in\n\nCurrent bet: {}\nCurrent Pot: {}",
+                    "Choose an option:\n1. Check\n2. Raise\n3. Call\n4. Fold\n5. All-in\n\nCurrent bet: {}\nCurrent Pot: {}",
                     player.current_bet, self.pot
                 );
                 let _ = player.tx.send(Message::text(message));
@@ -262,14 +296,11 @@ impl Lobby {
                         "1" => {
                             if current_lobby_bet == 0 {
                                 player.state = CHECKED;
+                                self.broadcast(format!("{} has checked.", player.name)).await;
                                 players_remaining -= 1; // on valid moves, decrement the amount of players to make a move
+                                break;
                             } else {
-                                player
-                                    .tx
-                                    .send(Message::text(
-                                        "Invalid move: You can't check, there's a bet to call.",
-                                    ))
-                                    .ok();
+                                player.tx.send(Message::text("Invalid move: You can't check, there's a bet to call.",)).ok();
                             }
                         }
                         "2" => {
@@ -280,38 +311,37 @@ impl Lobby {
                             }
                             else {
                                 let _ = player.tx.send(Message::text("Bet must be greater than 0."));
-                                let _ = player.tx.send(Message::text("Enter your bet amount:"));
                             }
+                            let _ = player.tx.send(Message::text(format!("Your current bet is: {}\nYour wallet balance: {}", player.current_bet, player.wallet)));
+                            let _ = player.tx.send(Message::text("Enter your bet amount:"));
                             loop {
                                 let bet_amount = player.get_player_input().await;
                                 if let Ok(bet) = bet_amount.parse::<i32>() {
-                                    if bet > player.wallet || bet < bet_diff {
-                                        player.tx.send(Message::text("Invalid bet.")).ok();
+                                    // doesnt allow calling (all in case included) or raising if the player doesnt have enough money
+                                    if bet > player.wallet || bet <= bet_diff || bet <= 0 {
+                                        player.tx.send(Message::text("Invalid raise.")).ok();
                                     }
                                     else {
                                         if bet == player.wallet {
-                                            // if deciding to all in, broadcast it?
                                             player.state = ALL_IN;
+                                            self.broadcast(format!("{} has gone all in!", player.name)).await;
+                                        }
+                                        else{
+                                            player.state = RAISED;
                                         }
                                         player.wallet -= bet;
                                         player.current_bet += bet;
                                         self.pot += bet;
                                         current_lobby_bet = player.current_bet;
-                                        
-                                        if bet == bet_diff {
-                                            player.state = CALLED;
-                                            players_remaining -= 1; // player didnt raise, they matched the bet
-                                        }
-                                        else{
-                                            player.state = RAISED;
-                                            // reset the betting cycle so every player calls/raises the new max bet or folds
-                                            players_remaining = self.current_player_count - 1;
-                                        }
+
+                                        self.broadcast(format!("{} has raised the pot to: {}", player.name, player.current_bet)).await;
+                                        // reset the betting cycle so every player calls/raises the new max bet or folds
+                                        players_remaining = self.current_player_count - 1;
                                         break;
                                     }
                                 } else {
                                     player
-                                        .tx.send(Message::text("Invalid bet: not a number.")).ok();
+                                        .tx.send(Message::text("Invalid raise : not a number.")).ok();
                                 }
                             }
                         }
@@ -324,15 +354,20 @@ impl Lobby {
                                 player.current_bet += call_amount;
                                 self.pot += call_amount;
                                 player.state = CALLED;
+                                self.broadcast(format!("{} has called the bet.", player.name)).await;
                                 players_remaining -= 1;
+                                break;
                             }
                         }
                         "4" => {
                             player.state = FOLDED;
+                            self.broadcast(format!("{} has folded.", player.name)).await;
                             players_remaining -= 1;
+                            break;
                         }
                         "5" => {
                             // all in
+                            // side pots not considered yet
                             if player.wallet > 0 {
                                 self.pot += player.wallet;
                                 player.current_bet += player.wallet;
@@ -341,8 +376,14 @@ impl Lobby {
                                     current_lobby_bet = player.current_bet;
                                 }
                                 player.state = ALL_IN;
+                                self.broadcast(format!("{} has gone all in!", player.name)).await;
                                 players_remaining -= 1;
+                                break;
                             }
+                        },
+                        "Disconnected" => {
+                            self.broadcast(format!("{} has disconnected and folded.", player.name)).await;
+                            break;
                         }
                         _ => {
                             player.tx.send(Message::text("Invalid action, try again.")).ok();
@@ -375,48 +416,57 @@ impl Lobby {
             );
             let _ = player.tx.send(Message::text(message));
            // Get player input
-            let input = player.get_player_input().await;
+            loop {
+                let input = player.get_player_input().await;
 
-            if input == "stand_pat" {
-                continue;
-                //The input looks like "exchange 1,2,3" where 1,2,3 are the indices of the cards the player wants to exchange
-            } else if input.starts_with("exchange ") {
-                // Extracting indices from the input
-                if let Some(indices_str) = input.strip_prefix("exchange ") {
-                    let indices: Vec<usize> = indices_str
-                        .split(',')
-                        .filter_map(|s| s.trim().parse().ok())
-                        .collect();
+                if input == "stand_pat" {
+                    break;
+                    //The input looks like "exchange 1,2,3" where 1,2,3 are the indices of the cards the player wants to exchange
+                } else if input.starts_with("exchange ") {
+                    // Extracting indices from the input
+                    if let Some(indices_str) = input.strip_prefix("exchange ") {
+                        let indices: Vec<usize> = indices_str
+                            .split(',')
+                            .filter_map(|s| s.trim().parse().ok())
+                            .collect();
 
-                    // Validate indices
-                    let valid_indices: Vec<usize> = indices
-                        .into_iter()
-                        .filter(|&i| i > 0 && i <= player.hand.len()) // Ensure within bounds
-                        .map(|i| i - 1) // Convert to zero-based index
-                        .collect();
+                        // Validate indices
+                        let valid_indices: Vec<usize> = indices
+                            .into_iter()
+                            .filter(|&i| i > 0 && i <= player.hand.len()) // Ensure within bounds
+                            .map(|i| i - 1) // Convert to zero-based index
+                            .collect();
 
-                    // Remove selected cards and deal new ones
-                    let mut new_hand = Vec::new();
-                    for (i, card) in player.hand.iter().enumerate() {
-                        //If the index i is not in valid_indices, the card is added to new_hand. 
-                        //The *card syntax dereferences the card reference to get the actual card value.
-                        if !valid_indices.contains(&i) {
-                            new_hand.push(*card);
+                        // Remove selected cards and deal new ones
+                        let mut new_hand = Vec::new();
+                        for (i, card) in player.hand.iter().enumerate() {
+                            //If the index i is not in valid_indices, the card is added to new_hand. 
+                            //The *card syntax dereferences the card reference to get the actual card value.
+                            if !valid_indices.contains(&i) {
+                                new_hand.push(*card);
+                            }
                         }
-                    }
-                    //In this step so lets say now we should have hand of cards that were not selected for exchange for the player
-                    //Now we will deal the player new cards for the cards that were exchanged
-                    for _ in &valid_indices {
-                        new_hand.push(self.deck.deal());
-                    }
-                    player.hand = new_hand;
+                        //In this step so lets say now we should have hand of cards that were not selected for exchange for the player
+                        //Now we will deal the player new cards for the cards that were exchanged
+                        for _ in &valid_indices {
+                            new_hand.push(self.deck.deal());
+                        }
+                        player.hand = new_hand;
 
-                    // Display the new hand to the player
-                    let message = format!("{{\"Your hand\": {:?}}}", player.hand);
-                    let _ = player.tx.send(Message::text(message));
+                        // Display the new hand to the player
+                        let message = format!("{{\"Your hand\": {:?}}}", player.hand);
+                        let _ = player.tx.send(Message::text(message));
+                        break;
+                    }
+                    
+                } 
+                else if input.starts_with("Disconnected") {
+                    self.broadcast(format!("{} has disconnected and folded.", player.name)).await;
+                    break;
                 }
-            } else {
-                let _ = player.tx.send(Message::text("Invalid action."));
+                else {
+                    let _ = player.tx.send(Message::text("Invalid action."));
+                }
             }
         }
     }
@@ -555,7 +605,8 @@ impl Lobby {
                     self.game_state = UPDATE_DB;
                 }
                 UPDATE_DB => {
-                    self.game_state = JOINABLE;
+
+                    self.game_state = IN_LOBBY;
                 }
                 _ => {
                     panic!("Invalid game state: {}", self.game_state);
