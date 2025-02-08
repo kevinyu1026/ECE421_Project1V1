@@ -19,7 +19,6 @@ const SECOND_BETTING_ROUND: i32 = 6;
 const SHOWDOWN: i32 = 7;
 const END_OF_ROUND: i32 = 8;
 const UPDATE_DB: i32 = 9;
-// const ANTE_ROUND: i32 = 0;
 
 // Player state definitions
 pub const READY: i32 = 0;
@@ -306,7 +305,7 @@ impl Lobby {
                                         else{
                                             player.state = RAISED;
                                             // reset the betting cycle so every player calls/raises the new max bet or folds
-                                            players_remaining = self.current_player_count;
+                                            players_remaining = self.current_player_count - 1;
                                         }
                                         break;
                                     }
@@ -319,7 +318,7 @@ impl Lobby {
                         "3" => {
                             let call_amount = current_lobby_bet - player.current_bet;
                             if call_amount > player.wallet {
-                                player.tx.send(Message::text("Invalid move: not enough cash.")).ok();
+                                player.tx.send(Message::text("Invalid move: not enough cash.\nAll in or fold!")).ok();
                             } else {
                                 player.wallet -= call_amount;
                                 player.current_bet += call_amount;
@@ -336,8 +335,8 @@ impl Lobby {
                             // all in
                             if player.wallet > 0 {
                                 self.pot += player.wallet;
-                                player.wallet -= player.wallet;
                                 player.current_bet += player.wallet;
+                                player.wallet -= player.wallet;
                                 if player.current_bet > current_lobby_bet {
                                     current_lobby_bet = player.current_bet;
                                 }
@@ -346,7 +345,7 @@ impl Lobby {
                             }
                         }
                         _ => {
-                            player.tx.send(Message::text("Invalid action.")).ok();
+                            player.tx.send(Message::text("Invalid action, try again.")).ok();
                         }
                     }
                 }
@@ -535,6 +534,7 @@ impl Lobby {
                     self.broadcast("First betting round!".to_string()).await;
                     self.betting_round(FIRST_BETTING_ROUND).await;
                     self.game_state = DRAW;
+                    self.broadcast(format!("First betting round complete!\nCurrent pot: {}", self.pot)).await;
                 }
                 DRAW => {
                     self.broadcast("Drawing round!".to_string()).await;
@@ -542,6 +542,10 @@ impl Lobby {
                     self.game_state = SECOND_BETTING_ROUND;
                 }
                 SECOND_BETTING_ROUND => {
+                    self.broadcast("Second betting round!".to_string()).await;
+                    self.betting_round(FIRST_BETTING_ROUND).await;
+                    self.game_state = DRAW;
+                    self.broadcast(format!("Second betting round complete!\nCurrent pot: {}", self.pot)).await;
                     self.game_state = SHOWDOWN;
                 }
                 SHOWDOWN => {
