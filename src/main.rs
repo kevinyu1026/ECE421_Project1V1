@@ -387,9 +387,12 @@ async fn join_lobby(mut server_lobby: Lobby, mut player: Player, db: Arc<Databas
                     player.ready = true;
                     player_lobby.ready_up(player.name.clone()).await;
                     // if all players are ready, start game
-                    let players = player_lobby.players.lock().await;
-                    if players.iter().all(|p| p.ready) {
-                        // player_lobby.start_game().await;
+                    let all_ready = {
+                        let players = player_lobby.players.lock().await;
+                        players.iter().all(|p| p.ready)
+                    };
+                    if all_ready {
+                        player_lobby.start_game().await;
                     }
                 } else if choice.starts_with("p") {
                     let players: String = player_lobby.get_player_names().await;
