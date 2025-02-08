@@ -63,7 +63,7 @@ impl Player {
         db.update_player_stats(&self).await.unwrap();
 
         server_lobby
-            .remove_player(server_lobby.clone(), self.name.clone())
+            .remove_player(self.name.clone())
             .await;
         server_lobby
             .broadcast(format!("{} has left the server.", self.name))
