@@ -1,6 +1,7 @@
 //!
 use super::*;
 use crate::Deck;
+use futures_util::future::ready;
 use sqlx::SqlitePool;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
@@ -76,6 +77,16 @@ impl Player {
             match result {
                 Ok(msg) => {
                     if msg.is_close() {
+                        return "Disconnect".to_string();
+                        // if self.state == IN_LOBBY {
+                        //     self.lobby
+                        //         .remove_player(self.name.clone())
+                        //         .await;
+                        // if self.state == IN_GAME {
+
+                        // if self.state == IN_BETTING_ROUND {}
+
+                        // if self.state == ....
                         println!("{} has disconnected.", self.name);
                         self.lobby
                             .remove_player(self.name.clone())
@@ -108,7 +119,8 @@ impl Player {
         println!("Lobby name entered: {}", lobby_name);
         if let Some(lobby) = lobbies.iter_mut().find(|l| l.name == lobby_name) {
             if lobby.game_state == JOINABLE {
-                lobby.players.lock().await.push(self.clone());
+                // lobby.players.lock().await.push(self.clone());
+                lobby.add_player(self.clone()).await;
                 self.lobby = lobby.clone();
                 return SUCCESS;
             } else {
@@ -152,6 +164,18 @@ impl Lobby {
         }
     }
 
+    pub async fn increment_player_count(&mut self) {
+        self.current_player_count += 1;
+    }
+
+    pub async fn decrement_player_count(&mut self) {
+        self.current_player_count -= 1;
+    }
+
+    pub async fn get_player_count(&self) -> i32 {
+        self.current_player_count
+    }
+
     pub async fn add_player(&mut self, mut player: Player) {
         let mut players = self.players.lock().await;
         player.state = IN_LOBBY;
@@ -163,7 +187,7 @@ impl Lobby {
         let mut players = self.players.lock().await;
         players.retain(|p| p.name != username);
         println!("Player removed from {}: {}",self.name, username);
-        self.current_player_count-=1;
+        self.current_player_count -= 1;
         if self.current_player_count == 0{
             return GAME_LOBBY_EMPTY;
         }
@@ -196,7 +220,7 @@ impl Lobby {
             .iter()
             .map(|p| p.name.clone())
             .collect::<Vec<String>>()
-            .join(", ");
+            .join("\n");
         message
     }
 
@@ -207,11 +231,18 @@ impl Lobby {
         }
     }
 
-    pub async fn ready_up(&self, username: String) {
+    pub async fn ready_up(&self, username: String) -> (i32,i32) {
         let mut players = self.players.lock().await;
         if let Some(player) = players.iter_mut().find(|p| p.name == username) {
             player.ready = true;
         }
+        let mut ready_player_count = 0;
+        for player in players.iter() {
+            if player.ready {
+                ready_player_count += 1;
+            }
+        }
+        return (ready_player_count, self.current_player_count);
     }
 
     async fn deal_cards(&mut self) {
@@ -258,6 +289,12 @@ impl Lobby {
                 let _ = player.tx.send(Message::text(message));
                 loop {
                     let choice = player.get_player_input().await;
+
+                    //
+
+                        
+                    //
+
                     match choice.as_str() {
                         "1" => {
                             if current_lobby_bet == 0 {
@@ -504,8 +541,9 @@ impl Lobby {
         }
     }
 
-    pub async fn start_game(&mut self) {
+    pub async fn start_game(&mut self){
         // change lobby state first so nobody can try to join anymore
+        
         self.game_state = START_OF_ROUND;
         self.change_player_state(IN_GAME);
         self.game_state_machine();
