@@ -537,6 +537,8 @@ impl Lobby {
                     self.game_state = DRAW;
                 }
                 DRAW => {
+                    self.broadcast("Drawing round!".to_string()).await;
+                    self.drawing_round().await;
                     self.game_state = SECOND_BETTING_ROUND;
                 }
                 SECOND_BETTING_ROUND => {
