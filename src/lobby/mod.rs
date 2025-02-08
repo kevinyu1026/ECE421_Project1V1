@@ -358,6 +358,73 @@ impl Lobby {
         }
     }
 
+    async fn drawing_round(&mut self){
+        //As the drawing round starts, we will check if their status is folded, if it is, we will skip them
+        //else we will continue the drawing round for that player and we will display a input menu of "Stand Pat or Exchange cards"
+        //if the player chooses to exchange cards, we will remove the cards from their hand and deal them new cards the logic for this will be
+        //once players chooses the index of cards they want to change, we will remove those cards from their hand and deal them new cards
+        //If they stand pat nothing will happen and it will move to the next player
+        //Once the cards are swap we will quickly display the cards to the player only.
+        //Once all players have swapped their cards, we will move to the next betting round
+        let mut players = self.players.lock().await;
+        for player in players.iter_mut(){
+            if player.state == FOLDED || player.state == ALL_IN {continue};
+            let message = format!(
+                //displays the user hand
+                "{{\"action\": \"draw\", \"hand\": {:?}}}",
+                player.hand
+            );
+            let _ = player.tx.send(Message::text(message));
+           // Get player input
+            let input = player.get_player_input().await;
+
+            if input == "stand_pat" {
+                continue;
+                //The input looks like "exchange 1,2,3" where 1,2,3 are the indices of the cards the player wants to exchange
+            } else if input.starts_with("exchange ") {
+                // Extracting indices from the input
+                if let Some(indices_str) = input.strip_prefix("exchange ") {
+                    let indices: Vec<usize> = indices_str
+                        .split(',')
+                        .filter_map(|s| s.trim().parse().ok())
+                        .collect();
+
+                    // Validate indices
+                    let valid_indices: Vec<usize> = indices
+                        .into_iter()
+                        .filter(|&i| i > 0 && i <= player.hand.len()) // Ensure within bounds
+                        .map(|i| i - 1) // Convert to zero-based index
+                        .collect();
+
+                    // Remove selected cards and deal new ones
+                    let mut new_hand = Vec::new();
+                    for (i, card) in player.hand.iter().enumerate() {
+                        //If the index i is not in valid_indices, the card is added to new_hand. 
+                        //The *card syntax dereferences the card reference to get the actual card value.
+                        if !valid_indices.contains(&i) {
+                            new_hand.push(*card);
+                        }
+                    }
+                    //In this step so lets say now we should have hand of cards that were not selected for exchange for the player
+                    //Now we will deal the player new cards for the cards that were exchanged
+                    for _ in &valid_indices {
+                        new_hand.push(self.deck.deal());
+                    }
+                    player.hand = new_hand;
+
+                    // Display the new hand to the player
+                    let message = format!("{{\"Your hand\": {:?}}}", player.hand);
+                    let _ = player.tx.send(Message::text(message));
+                }
+            } else {
+                let _ = player.tx.send(Message::text("Invalid action."));
+            }
+        }
+    }
+
+
+
+
     async fn showdown(&self) {
         let players: Vec<Player> = self.players.lock().await.to_vec();
         let mut winning_players: Vec<Player> = Vec::new(); // keeps track of winning players at the end, accounting for draws
