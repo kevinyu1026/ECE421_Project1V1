@@ -36,6 +36,9 @@ const IN_GAME: i32 = 7;
 pub const SUCCESS: i32 = 100;
 pub const FAILED: i32 = 101;
 pub const SERVER_FULL: i32 = 102;
+pub const GAME_LOBBY_EMPTY: i32 = 103;
+pub const GAME_LOBBY_NOT_EMPTY: i32 = 104;
+
 
 // Define Player struct
 #[derive(Clone)]
@@ -60,14 +63,14 @@ impl Player {
         db.update_player_stats(&self).await.unwrap();
 
         server_lobby
-            .remove_player(server_lobby.clone(), self.name.clone())
+            .remove_player(self.name.clone())
             .await;
         server_lobby
             .broadcast(format!("{} has left the server.", self.name))
             .await;
     }
 
-    pub async fn get_player_input(&self) -> String {
+    pub async fn get_player_input(&mut self) -> String {
         let mut return_string: String = "".to_string();
         let mut rx = self.rx.lock().await;
         while let Some(result) = rx.next().await {
@@ -75,8 +78,12 @@ impl Player {
                 Ok(msg) => {
                     if msg.is_close() {
                         println!("{} has disconnected.", self.name);
-                        return_string = "Disconnected".to_string();
-                        break;
+                        self.lobby
+                            .remove_player(self.name.clone())
+                            .await;
+                        println!("{} has left the lobby.", self.name);
+                        self.lobby.remove_player(self.name.clone()).await;
+                        self.state = IN_SERVER;
                     } else {
                         // handles client response here----------------
                         if let Ok(str_input) = msg.to_str() {
@@ -84,19 +91,36 @@ impl Player {
                         } else {
                             return_string = "Error".to_string();
                         }
-                        break;
+                        return return_string;
                     }
                 }
                 Err(e) => {
                     eprintln!("Error: {}", e);
                     return_string = "Error".to_string();
-                    break;
+                    return return_string;
                 }
             }
         }
         return return_string;
     }
+
+    pub async fn player_join_lobby(&mut self, server_lobby: Lobby, lobby_name: String) -> i32 {
+        let mut lobbies = server_lobby.lobbies.lock().await;
+        println!("Lobby name entered: {}", lobby_name);
+        if let Some(lobby) = lobbies.iter_mut().find(|l| l.name == lobby_name) {
+            if lobby.game_state == JOINABLE {
+                lobby.players.lock().await.push(self.clone());
+                self.lobby = lobby.clone();
+                return SUCCESS;
+            } else {
+                return SERVER_FULL;
+            }
+        }
+        FAILED
+    }
 }
+
+
 
 #[derive(Clone)]
 pub struct Lobby {
@@ -136,14 +160,15 @@ impl Lobby {
         players.push(player);
     }
 
-    pub async fn remove_player(&mut self, server_lobby: Lobby, username: String) {
+    pub async fn remove_player(&mut self, username: String) -> i32{
         let mut players = self.players.lock().await;
         players.retain(|p| p.name != username);
-        println!("Player removed from {}: {}", self.name, username);
-        self.current_player_count -= 1;
-        if self.current_player_count == 0 {
-            server_lobby.remove_lobby(self.name.clone()).await;
+        println!("Player removed from {}: {}",self.name, username);
+        self.current_player_count-=1;
+        if self.current_player_count == 0{
+            return GAME_LOBBY_EMPTY;
         }
+        GAME_LOBBY_NOT_EMPTY
     }
 
     pub async fn add_lobby(&self, lobby: Lobby) {
@@ -164,31 +189,6 @@ impl Lobby {
     pub async fn lobby_exists(&self, lobby_name: String) -> bool {
         let lobbies = self.lobbies.lock().await;
         lobbies.iter().any(|l| l.name == lobby_name)
-    }
-
-    pub async fn player_join_lobby(&self, username: String, lobby_name: String) -> i32 {
-        let mut lobbies = self.lobbies.lock().await;
-        println!("Lobby name entered: {}", lobby_name);
-        if let Some(lobby) = lobbies.iter_mut().find(|l| l.name == lobby_name) {
-            let players = self.players.lock().await;
-            if lobby.game_state == JOINABLE {
-                println!("Player username: {}", username);
-                if let Some(mut player) = players
-                    .iter()
-                    .find(|p| p.name == username.to_string())
-                    .cloned()
-                {
-                    player.lobby = lobby.clone();
-                    lobby.add_player(player).await;
-                    return SUCCESS;
-                } else {
-                    println!("Player not found");
-                }
-            } else {
-                return SERVER_FULL;
-            }
-        }
-        FAILED
     }
 
     pub async fn get_player_names(&self) -> String {
