@@ -1,11 +1,10 @@
 //!
-use std::string;
-use std::sync::Arc;
-use tokio::sync::{ mpsc, Mutex };
-use sqlx::SqlitePool;
-use crate::Deck;
-use warp::{filters::ws::WebSocket, ws::Message};
 use super::*;
+use crate::Deck;
+use sqlx::SqlitePool;
+use std::sync::Arc;
+use tokio::sync::{mpsc, Mutex};
+use warp::{filters::ws::WebSocket, ws::Message};
 
 // Lobby attribute definitions
 pub const MAX_PLAYER_COUNT: i32 = 5;
@@ -20,9 +19,7 @@ const SECOND_BETTING_ROUND: i32 = 6;
 const SHOWDOWN: i32 = 7;
 const END_OF_ROUND: i32 = 8;
 const UPDATE_DB: i32 = 9;
-const ANTE_ROUND: i32 = 0;
-const FIRST_ROUND: i32 = 1;
-const SECOND_ROUND: i32 = 2;
+// const ANTE_ROUND: i32 = 0;
 
 // Player state definitions
 pub const READY: i32 = 0;
@@ -30,6 +27,7 @@ const FOLDED: i32 = 1;
 const ALL_IN: i32 = 2;
 const CHECKED: i32 = 3;
 const CALLED: i32 = 4;
+const RAISED: i32 = 8;
 pub const IN_LOBBY: i32 = 5;
 pub const IN_SERVER: i32 = 6;
 const IN_GAME: i32 = 7;
@@ -61,10 +59,12 @@ impl Player {
     pub async fn remove_player(&self, mut server_lobby: Lobby, db: Arc<Database>) {
         db.update_player_stats(&self).await.unwrap();
 
-        server_lobby.remove_player(server_lobby.clone(), self.name.clone()).await;
-        server_lobby.broadcast(
-            format!("{} has left the server.", self.name)
-        ).await;
+        server_lobby
+            .remove_player(server_lobby.clone(), self.name.clone())
+            .await;
+        server_lobby
+            .broadcast(format!("{} has left the server.", self.name))
+            .await;
     }
 
     pub async fn get_player_input(&self) -> String {
@@ -74,7 +74,6 @@ impl Player {
             match result {
                 Ok(msg) => {
                     if msg.is_close() {
-
                         println!("{} has disconnected.", self.name);
                         return_string = "Disconnected".to_string();
                         break;
@@ -99,8 +98,6 @@ impl Player {
     }
 }
 
-
-
 #[derive(Clone)]
 pub struct Lobby {
     pub name: String,
@@ -109,7 +106,6 @@ pub struct Lobby {
     pub lobbies: Arc<Mutex<Vec<Lobby>>>,
     pub game_db: SqlitePool,
     deck: Deck,
-    pub current_max_bet: i32,
     pub pot: i32,
     pub current_player_count: i32,
     pub max_player_count: i32,
@@ -124,7 +120,6 @@ impl Lobby {
             players: Arc::new(Mutex::new(Vec::new())),
             lobbies: Arc::new(Mutex::new(Vec::new())),
             deck: Deck::new(),
-            current_max_bet: 0,
             current_player_count: 0,
             max_player_count: player_count.unwrap_or(MAX_PLAYER_COUNT),
             pot: 0,
@@ -137,16 +132,16 @@ impl Lobby {
     pub async fn add_player(&mut self, mut player: Player) {
         let mut players = self.players.lock().await;
         player.state = IN_LOBBY;
-        self.current_player_count+=1;
+        self.current_player_count += 1;
         players.push(player);
     }
 
-    pub async fn remove_player(&mut self, server_lobby:Lobby, username: String) {
+    pub async fn remove_player(&mut self, server_lobby: Lobby, username: String) {
         let mut players = self.players.lock().await;
         players.retain(|p| p.name != username);
-        println!("Player removed from {}: {}",self.name, username);
-        self.current_player_count-=1;
-        if self.current_player_count == 0{
+        println!("Player removed from {}: {}", self.name, username);
+        self.current_player_count -= 1;
+        if self.current_player_count == 0 {
             server_lobby.remove_lobby(self.name.clone());
         }
     }
@@ -163,10 +158,7 @@ impl Lobby {
 
     pub async fn get_lobby_names(&self) -> Vec<String> {
         let lobbies = self.lobbies.lock().await;
-        lobbies
-            .iter()
-            .map(|l| l.name.clone())
-            .collect()
+        lobbies.iter().map(|l| l.name.clone()).collect()
     }
 
     pub async fn lobby_exists(&self, lobby_name: String) -> bool {
@@ -181,11 +173,10 @@ impl Lobby {
             let players = self.players.lock().await;
             if lobby.game_state == JOINABLE {
                 println!("Player username: {}", username);
-                if
-                    let Some(mut player) = players
-                        .iter()
-                        .find(|p| p.name == username.to_string())
-                        .cloned()
+                if let Some(mut player) = players
+                    .iter()
+                    .find(|p| p.name == username.to_string())
+                    .cloned()
                 {
                     player.lobby = lobby.clone();
                     lobby.add_player(player).await;
@@ -202,7 +193,11 @@ impl Lobby {
 
     pub async fn get_player_names(&self) -> String {
         let players = self.players.lock().await;
-        let message = players.iter().map(|p| p.name.clone()).collect::<Vec<String>>().join(", ");
+        let message = players
+            .iter()
+            .map(|p| p.name.clone())
+            .collect::<Vec<String>>()
+            .join(", ");
         message
     }
 
@@ -231,97 +226,127 @@ impl Lobby {
 
     async fn betting_round(&mut self, round: i32) {
         let mut players = self.players.lock().await;
-        self.current_max_bet = 0;
-        
         // ensure all players have current_bet set to 0
+
         for player in players.iter_mut() {
             player.current_bet = 0;
         }
         let mut current_player_index = self.first_betting_player;
-        let mut current_bet = 0;
+        let mut current_lobby_bet = 0; // resets to 0 every betting round
         let mut players_remaining = self.current_player_count;
 
         while players_remaining > 1 {
             let player = &mut players[current_player_index as usize];
-
-            let mut message = format!(
-                "{{\"action\": \"bet\", \"current_bet\": {}, \"pot\": {}}}",
-                player.current_bet,
-                self.pot
-            );
-            if round == ANTE_ROUND {
+            if player.state == FOLDED || player.state == ALL_IN{
+                current_player_index = (current_player_index + 1) % self.current_player_count;
+                continue;
+            }
+            if round == ANTE {
                 if player.wallet > 10 {
                     self.pot += 10;
                     player.wallet -= 10;
                     player.current_bet += 10;
+                    players_remaining -= 1;
+                }
+                else {
+                    player.state = FOLDED; // they couldnt afford ANTE, gettt emmm outttt
                 }
             } else {
+                let message = format!(
+                    "Choose an option:\n1. Check\n2. Bet\n3. Call\n4. Fold\n5. All-in\n\nCurrent bet: {}\nCurrent Pot: {}",
+                    player.current_bet, self.pot
+                );
                 let _ = player.tx.send(Message::text(message));
-                if let Some(Ok(response_msg)) = player.tx.recv().await {
-                    if let Ok(response_str) = response_msg.to_str() {
-                        if
-                            let Ok(response) =
-                                serde_json::from_str::<serde_json::Value>(response_str)
-                        {
-                            if let Some(action) = response["action"].as_str() {
-                                match action {
-                                    "fold" => {
-                                        players_remaining -= 1;
+                loop {
+                    let choice = player.get_player_input().await;
+                    match choice.as_str() {
+                        "1" => {
+                            if current_lobby_bet == 0 {
+                                player.state = CHECKED;
+                                players_remaining -= 1; // on valid moves, decrement the amount of players to make a move
+                            } else {
+                                player
+                                    .tx
+                                    .send(Message::text(
+                                        "Invalid move: You can't check, there's a bet to call.",
+                                    ))
+                                    .ok();
+                            }
+                        }
+                        "2" => {
+                            let bet_diff = current_lobby_bet - player.current_bet;
+                            if current_lobby_bet > 0 {
+                                // print the minimum the player has to bet to stay in the game
+                                let _ = player.tx.send(Message::text(format!("Current minimum bet is: {}", bet_diff)));
+                            }
+                            else {
+                                let _ = player.tx.send(Message::text("Bet must be greater than 0."));
+                                let _ = player.tx.send(Message::text("Enter your bet amount:"));
+                            }
+                            loop {
+                                let bet_amount = player.get_player_input().await;
+                                if let Ok(bet) = bet_amount.parse::<i32>() {
+                                    if bet > player.wallet || bet < bet_diff {
+                                        player.tx.send(Message::text("Invalid bet.")).ok();
                                     }
-                                    "call" => {
-                                        let call_amount = self.current_max_bet - player.current_bet;
-                                        if call_amount > player.wallet {
-                                            player.wallet = 0;
-                                            player.current_bet += call_amount;
-                                            self.pot += call_amount;
-                                        } else {
-                                            player.wallet -= call_amount;
-                                            player.current_bet += call_amount;
-                                            self.pot += call_amount;
+                                    else {
+                                        if bet == player.wallet {
+                                            // if deciding to all in, broadcast it?
+                                            player.state = ALL_IN;
                                         }
-                                    }
-                                    "raise" => {
-                                        if let Some(bet) = response["bet"].as_i64() {
-                                            let bet = bet as i32;
-                                            if bet > player.wallet {
-                                                player.tx
-                                                    .send(
-                                                        Message::text(
-                                                            "Invalid bet: not enough cash."
-                                                        )
-                                                    )
-                                                    .ok();
-                                            } else {
-                                                player.wallet -= bet;
-                                                player.current_bet += bet;
-                                                self.pot += bet;
-                                                self.current_max_bet = player.current_bet;
-                                            }
+                                        player.wallet -= bet;
+                                        player.current_bet += bet;
+                                        self.pot += bet;
+                                        current_lobby_bet = player.current_bet;
+                                        
+                                        if bet == bet_diff {
+                                            player.state = CALLED;
+                                            players_remaining -= 1; // player didnt raise, they matched the bet
                                         }
-                                    }
-                                    "all-in" => {
-                                        let all_in_amount = player.wallet;
-                                        player.current_bet += all_in_amount;
-                                        self.pot += all_in_amount;
-                                        player.wallet = 0;
-                                        self.current_max_bet = player.current_bet;
-                                    }
-                                    "check" => {
-                                        if player.current_bet < self.current_max_bet {
-                                            player.tx
-                                                .send(
-                                                    Message::text(
-                                                        "Invalid move: You can't check, there's a bet to call."
-                                                    )
-                                                )
-                                                .ok();
+                                        else{
+                                            player.state = RAISED;
+                                            // reset the betting cycle so every player calls/raises the new max bet or folds
+                                            players_remaining = self.current_player_count;
                                         }
+                                        break;
                                     }
-                                    _ => {
-                                        player.tx.send(Message::text("Invalid action.")).ok();
-                                    }
+                                } else {
+                                    player
+                                        .tx.send(Message::text("Invalid bet: not a number.")).ok();
                                 }
                             }
+                        }
+                        "3" => {
+                            let call_amount = current_lobby_bet - player.current_bet;
+                            if call_amount > player.wallet {
+                                player.tx.send(Message::text("Invalid move: not enough cash.")).ok();
+                            } else {
+                                player.wallet -= call_amount;
+                                player.current_bet += call_amount;
+                                self.pot += call_amount;
+                                player.state = CALLED;
+                                players_remaining -= 1;
+                            }
+                        }
+                        "4" => {
+                            player.state = FOLDED;
+                            players_remaining -= 1;
+                        }
+                        "5" => {
+                            // all in
+                            if player.wallet > 0 {
+                                self.pot += player.wallet;
+                                player.wallet -= player.wallet;
+                                player.current_bet += player.wallet;
+                                if player.current_bet > current_lobby_bet {
+                                    current_lobby_bet = player.current_bet;
+                                }
+                                player.state = ALL_IN;
+                                players_remaining -= 1;
+                            }
+                        }
+                        _ => {
+                            player.tx.send(Message::text("Invalid action.")).ok();
                         }
                     }
                 }
@@ -329,6 +354,7 @@ impl Lobby {
 
             // Move to next player
             current_player_index = (current_player_index + 1) % self.current_player_count;
+            // players_remaining -= 1; // ensure we give everyone a change to do an action
         }
     }
 
@@ -337,10 +363,14 @@ impl Lobby {
         let mut winning_players: Vec<Player> = Vec::new(); // keeps track of winning players at the end, accounting for draws
         let mut winning_hand = (0, 0, 0, 0, 0, 0); // keeps track of current highest hand, could change when incrementing between players
         for player in players {
-            if player.state == FOLDED {continue};
+            if player.state == FOLDED {
+                continue;
+            };
             let player_hand = player.hand.clone();
             let player_hand_type = get_hand_type(&player_hand);
-            if player_hand_type.0 > winning_hand.0 || (player_hand_type.0 == winning_hand.0 && player_hand_type.1 > winning_hand.1) {
+            if player_hand_type.0 > winning_hand.0
+                || (player_hand_type.0 == winning_hand.0 && player_hand_type.1 > winning_hand.1)
+            {
                 winning_hand = player_hand_type;
                 winning_players.clear();
                 winning_players.push(player);
@@ -355,50 +385,43 @@ impl Lobby {
             player.wallet += pot_share;
         }
     }
-    
+
     async fn change_player_state(&self, state: i32) {
         // loop through players and change their state
         let mut players = self.players.lock().await;
         for player in players.iter_mut() {
             player.state = state;
         }
-     }
-    
+    }
+
     async fn translate_card(&self, card: i32) -> String {
         let mut cardStr: String = Default::default();
         let rank: i32 = card % 13;
 
         if rank == 0 {
             cardStr.push_str("Ace");
-        }
-        else if rank <= 9 {
+        } else if rank <= 9 {
             cardStr.push_str(&(rank + 1).to_string());
-        }
-        else if rank == 10 {
+        } else if rank == 10 {
             cardStr.push_str("Jack");
-        }
-        else if rank == 11 {
+        } else if rank == 11 {
             cardStr.push_str("Queen");
-        }
-        else if rank == 12 {
+        } else if rank == 12 {
             cardStr.push_str("King");
         }
 
         let suit: i32 = card / 13;
         if suit == 0 {
             cardStr.push_str(" Hearts");
-        }
-        else if suit == 1 {
+        } else if suit == 1 {
             cardStr.push_str(" Diamond");
-        }
-        else if suit == 2 {
+        } else if suit == 2 {
             cardStr.push_str(" Spade");
-        }
-        else if suit == 3 {
+        } else if suit == 3 {
             cardStr.push_str(" Club");
         }
         return cardStr;
-     }
+    }
 
     async fn display_hand(&self) {
         let mut players = self.players.lock().await;
@@ -415,40 +438,35 @@ impl Lobby {
         }
     }
 
-    pub fn start_game(&mut self) {
+    pub async fn start_game(&mut self) {
         // change lobby state first so nobody can try to join anymore
         self.game_state = START_OF_ROUND;
         self.change_player_state(IN_GAME);
         self.game_state_machine();
     }
 
-    
-
-    fn game_state_machine(&self) {
+    async fn game_state_machine(&mut self) {
         loop {
             match self.game_state {
-                _ if self.game_state < 0 || self.game_state > 9 => {
-                    panic!("Invalid game state: {}", self.game_state);
-                }
                 START_OF_ROUND => {
                     self.game_state = ANTE;
                 }
                 ANTE => {
-                    self.broadcast("Ante round!\nEveryone adds $10 to the pot.".to_string());
-                    self.betting_round(ANTE_ROUND);
-                    self.broadcast(format!("Current pot: {}", self.pot));
+                    self.broadcast("Ante round!\nEveryone adds $10 to the pot.".to_string()).await;
+                    self.betting_round(ANTE).await;
+                    self.broadcast(format!("Current pot: {}", self.pot)).await;
                     self.game_state = DEAL_CARDS;
                 }
                 DEAL_CARDS => {
-                    self.broadcast("Dealing cards...".to_string());
-                    self.deal_cards();
+                    self.broadcast("Dealing cards...".to_string()).await;
+                    self.deal_cards().await;
                     // display each players hands to them
-                    self.display_hand();
+                    self.display_hand().await;
                     self.game_state = FIRST_BETTING_ROUND;
                 }
                 FIRST_BETTING_ROUND => {
-                    self.broadcast("First betting round!".to_string());
-                    self.betting_round(FIRST_BETTING_ROUND);
+                    self.broadcast("First betting round!".to_string()).await;
+                    self.betting_round(FIRST_BETTING_ROUND).await;
                     self.game_state = DRAW;
                 }
                 DRAW => {
@@ -466,6 +484,9 @@ impl Lobby {
                 UPDATE_DB => {
                     self.game_state = JOINABLE;
                 }
+                _ => {
+                    panic!("Invalid game state: {}", self.game_state);
+                }
             }
         }
     }
@@ -480,10 +501,7 @@ fn get_hand_type(hand: &[i32]) -> (i32, i32, i32, i32, i32, i32) {
         .collect();
     ranks.sort();
 
-    let suits: Vec<i32> = hand
-        .iter()
-        .map(|&card| card / 13)
-        .collect();
+    let suits: Vec<i32> = hand.iter().map(|&card| card / 13).collect();
 
     // Check for flush
     let flush = suits.iter().all(|&suit| suit == suits[0]);
@@ -537,11 +555,32 @@ fn get_hand_type(hand: &[i32]) -> (i32, i32, i32, i32, i32, i32) {
 
     // Check two pair
     if ranks[0] == ranks[1] && ranks[2] == ranks[3] {
-        return (3, ranks[0].max(ranks[2]), ranks[0].min(ranks[2]), ranks[4], 0, 0);
+        return (
+            3,
+            ranks[0].max(ranks[2]),
+            ranks[0].min(ranks[2]),
+            ranks[4],
+            0,
+            0,
+        );
     } else if ranks[0] == ranks[1] && ranks[3] == ranks[4] {
-        return (3, ranks[0].max(ranks[3]), ranks[0].min(ranks[3]), ranks[2], 0, 0);
+        return (
+            3,
+            ranks[0].max(ranks[3]),
+            ranks[0].min(ranks[3]),
+            ranks[2],
+            0,
+            0,
+        );
     } else if ranks[1] == ranks[2] && ranks[3] == ranks[4] {
-        return (3, ranks[1].max(ranks[3]), ranks[1].min(ranks[3]), ranks[0], 0, 0);
+        return (
+            3,
+            ranks[1].max(ranks[3]),
+            ranks[1].min(ranks[3]),
+            ranks[0],
+            0,
+            0,
+        );
     }
 
     // Check one pair
