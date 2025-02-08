@@ -55,17 +55,17 @@ pub struct Player {
     pub ready: bool,
     pub games_played: i32,
     pub games_won: i32,
-    pub lobby: Lobby,
+    pub lobby: Arc<Mutex<Lobby>>,
 }
 
 impl Player {
-    pub async fn remove_player(&self, mut server_lobby: Lobby, db: Arc<Database>) {
+    pub async fn remove_player(&self, server_lobby: Arc<Mutex<Lobby>>, db: Arc<Database>) {
         db.update_player_stats(&self).await.unwrap();
 
-        server_lobby
+        server_lobby.lock().await
             .remove_player(self.name.clone())
             .await;
-        server_lobby
+        server_lobby.lock().await
             .broadcast(format!("{} has left the server.", self.name))
             .await;
     }
@@ -101,23 +101,11 @@ impl Player {
                                 self.state = FOLDED;
                             },
                             _ => {
-                                self.lobby
-                                    .remove_player(self.name.clone())
-                                    .await;
-                                println!("{} has left the lobby.", self.name);
-                                self.lobby.remove_player(self.name.clone()).await;
-                                self.state = IN_SERVER;
+                                self.state = IN_LOBBY;
                             }
-
                         }
-                        self.lobby
-                            .remove_player(self.name.clone())
-                            .await;
-                        println!("{} has left the lobby.", self.name);
-                        self.lobby.remove_player(self.name.clone()).await;
-                        self.state = IN_SERVER;
-
-                        return "Disconnected".to_string(); // pass flag back
+                        println!("Disconnect-------------");
+                        return "Disconnect".to_string(); // pass flag back
                     } else {
                         // handles client response here----------------
                         if let Ok(str_input) = msg.to_str() {
@@ -138,17 +126,19 @@ impl Player {
         return return_string;
     }
 
-    pub async fn player_join_lobby(&mut self, server_lobby: Lobby, lobby_name: String) -> i32 {
-        let mut lobbies = server_lobby.lobbies.lock().await;
+    pub async fn player_join_lobby(&mut self, server_lobby: Arc<Mutex<Lobby>>, lobby_name: String) -> i32 {
+        let lobbies = server_lobby.lock().await.lobbies.lock().await.clone();
         println!("Lobby name entered: {}", lobby_name);
-        if let Some(lobby) = lobbies.iter_mut().find(|l| l.name == lobby_name) {
-            if lobby.game_state == JOINABLE {
-                // lobby.players.lock().await.push(self.clone());
-                lobby.add_player(self.clone()).await;
-                self.lobby = lobby.clone();
-                return SUCCESS;
-            } else {
-                return SERVER_FULL;
+        for lobby in lobbies {
+            let mut lobby_guard = lobby.lock().await;
+            if lobby_guard.name == lobby_name {
+                if lobby_guard.game_state == JOINABLE {
+                    lobby_guard.add_player(self.clone()).await;
+                    self.lobby = lobby.clone();
+                    return SUCCESS;
+                } else {
+                    return SERVER_FULL;
+                }
             }
         }
         FAILED
@@ -162,7 +152,7 @@ pub struct Lobby {
     pub name: String,
     // Use Arc<Mutex<...>> so the Lobby struct can #[derive(Clone)]
     pub players: Arc<Mutex<Vec<Player>>>,
-    pub lobbies: Arc<Mutex<Vec<Lobby>>>,
+    pub lobbies: Arc<Mutex<Vec<Arc<Mutex<Lobby>>>>>,
     pub game_db: SqlitePool,
     deck: Deck,
     pub pot: i32,
@@ -218,24 +208,40 @@ impl Lobby {
         GAME_LOBBY_NOT_EMPTY
     }
 
-    pub async fn add_lobby(&self, lobby: Lobby) {
+    pub async fn add_lobby(&self, lobby: Arc<Mutex<Lobby>>) {
         let mut lobbies = self.lobbies.lock().await;
         lobbies.push(lobby);
     }
 
     pub async fn remove_lobby(&self, lobby_name: String) {
         let mut lobbies = self.lobbies.lock().await;
-        lobbies.retain(|l| l.name != lobby_name);
+        let mut i = 0;
+        while i < lobbies.len() {
+            if lobbies[i].lock().await.name == lobby_name {
+                lobbies.remove(i);
+            } else {
+                i += 1;
+            }
+        }
     }
 
     pub async fn get_lobby_names(&self) -> Vec<String> {
         let lobbies = self.lobbies.lock().await;
-        lobbies.iter().map(|l| l.name.clone()).collect()
+        let mut names = Vec::new();
+        for lobby in lobbies.iter() {
+            names.push(lobby.lock().await.name.clone());
+        }
+        names
     }
 
     pub async fn lobby_exists(&self, lobby_name: String) -> bool {
         let lobbies = self.lobbies.lock().await;
-        lobbies.iter().any(|l| l.name == lobby_name)
+        for lobby in lobbies.iter() {
+            if lobby.lock().await.name == lobby_name {
+                return true;
+            }
+        }
+        false
     }
 
     pub async fn get_player_names(&self) -> String {
@@ -498,9 +504,6 @@ impl Lobby {
         }
     }
 
-
-
-
     async fn showdown(&self) {
         let players: Vec<Player> = self.players.lock().await.to_vec();
         let mut winning_players: Vec<Player> = Vec::new(); // keeps track of winning players at the end, accounting for draws
@@ -533,6 +536,7 @@ impl Lobby {
         // loop through players and change their state
         let mut players = self.players.lock().await;
         for player in players.iter_mut() {
+            println!("Changing {} state to: {}", player.name, state);
             player.state = state;
         }
     }
@@ -583,10 +587,11 @@ impl Lobby {
 
     pub async fn start_game(&mut self){
         // change lobby state first so nobody can try to join anymore
-        
+        println!("Game started!");
         self.game_state = START_OF_ROUND;
-        self.change_player_state(IN_GAME);
-        self.game_state_machine();
+        self.change_player_state(IN_GAME).await;
+        
+        self.game_state_machine().await;
     }
 
     async fn game_state_machine(&mut self) {
