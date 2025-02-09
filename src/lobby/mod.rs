@@ -522,10 +522,11 @@ impl Lobby {
         let players_tx = players.iter().map(|p| p.tx.clone()).collect::<Vec<_>>();
         for player in players.iter_mut(){
             if player.state == FOLDED || player.state == ALL_IN {continue};
+            println!("Drawing round for: {}", player.name);
+            // self.display_hand().await;
             let message = format!(
                 //displays the user hand
-                "{{\"action\": \"draw\", \"hand\": {:?}}}",
-                player.hand
+                "Choose an option:\n    stand_pat\n    exchange [indicies you wanna exchange(comma seperated)]"
             );
             let _ = player.tx.send(Message::text(message));
            // Get player input
@@ -538,48 +539,52 @@ impl Lobby {
                 } else if input.starts_with("exchange ") {
                     // Extracting indices from the input
                     if let Some(indices_str) = input.strip_prefix("exchange ") {
+                        if !indices_str.chars().all(|c| c.is_digit(10) || c == ',' || c.is_whitespace()) {
+                            let _ = player.tx.send(Message::text("Invalid format. Use numbers separated by commas (e.g., 'exchange 1,2,3')."));
+                            continue;
+                        }
                         let indices: Vec<usize> = indices_str
-                            .split(',')
-                            .filter_map(|s| s.trim().parse().ok())
-                            .collect();
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty()) // Ensure no empty values
+            .filter_map(|s| s.parse().ok()) // Convert to numbers
+            .collect();
 
-                        // Validate indices
-                        let valid_indices: Vec<usize> = indices
-                            .into_iter()
-                            .filter(|&i| i > 0 && i <= player.hand.len()) // Ensure within bounds
-                            .map(|i| i - 1) // Convert to zero-based index
-                            .collect();
+            let mut valid_indices: Vec<usize> = indices
+                .iter()
+                .cloned()
+                .filter(|&i| i > 0 && i <= player.hand.len()) // Ensure within bounds
+                .map(|i| i - 1) // Convert to zero-based index
+                .collect();
 
-                        // Remove selected cards and deal new ones
-                        let mut new_hand = Vec::new();
-                        for (i, card) in player.hand.iter().enumerate() {
-                            //If the index i is not in valid_indices, the card is added to new_hand. 
-                            //The *card syntax dereferences the card reference to get the actual card value.
-                            if !valid_indices.contains(&i) {
-                                new_hand.push(*card);
-                            }
-                        }
-                        //In this step so lets say now we should have hand of cards that were not selected for exchange for the player
-                        //Now we will deal the player new cards for the cards that were exchanged
-                        for _ in &valid_indices {
-                            new_hand.push(self.deck.deal());
-                        }
-                        player.hand = new_hand;
+            valid_indices.sort();
+            valid_indices.dedup(); // Ensure uniqueness
 
-                        // Display the new hand to the player
-                        let message = format!("{{\"Your hand\": {:?}}}", player.hand);
-                        let _ = player.tx.send(Message::text(message));
-                        break;
+            if valid_indices.len() == indices.len() && !valid_indices.is_empty() {
+                let mut new_hand = Vec::new();
+                for (i, card) in player.hand.iter().enumerate() {
+                    if !valid_indices.contains(&i) {
+                        new_hand.push(*card);
                     }
-                    
-                } 
+                }
+                for _ in &valid_indices {
+                    new_hand.push(self.deck.deal());
+                }
+                player.hand = new_hand;
+                self.lobby_wide_send(players_tx.clone(),format!("{} has exchanged {} cards.", player.name, valid_indices.len())).await;
+                break;
+            } else {
+                let _ = player.tx.send(Message::text("Invalid indices. Ensure they are within range and correctly formatted."));
+            }
+        }
+    }
                 else if input.starts_with("Disconnected") {
                     // self.broadcast(format!("{} has disconnected and folded.", player.name)).await;
                     self.lobby_wide_send(players_tx.clone(), format!("{} has disconnected.", player.name)).await;
                     break;
                 }
                 else {
-                    let _ = player.tx.send(Message::text("Invalid action."));
+                    let _ = player.tx.send(Message::text("Invalid action. Please try again."));
                 }
             }
         }
@@ -711,6 +716,7 @@ impl Lobby {
                 DRAW => {
                     self.broadcast("Drawing round!".to_string()).await;
                     self.drawing_round().await;
+                    self.display_hand().await;
                     self.game_state = SECOND_BETTING_ROUND;
                 }
                 SECOND_BETTING_ROUND => {

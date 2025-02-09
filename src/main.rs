@@ -34,7 +34,7 @@ async fn main() {
             ws.on_upgrade(move |socket| handle_connection(socket, db, server_lobby))
         );
 
-    warp::serve(register_route).run(([0, 0, 0, 0], 1112)).await;
+    warp::serve(register_route).run(([0, 0, 0, 0], 1117)).await;
 }
 
 fn with_db(
