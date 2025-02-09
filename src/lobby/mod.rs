@@ -549,7 +549,7 @@ impl Lobby {
                     new_hand.push(self.deck.deal());
                 }
                 player.hand = new_hand;
-                self.broadcast(format!("{} has exchanged {} cards.", player.name, valid_indices.len())).await;
+                self.lobby_wide_send(players_tx.clone(),format!("{} has exchanged {} cards.", player.name, valid_indices.len())).await;
                 break;
             } else {
                 let _ = player.tx.send(Message::text("Invalid indices. Ensure they are within range and correctly formatted."));
