@@ -8,6 +8,7 @@ use std::sync::Arc;
 pub struct PlayerStats {
     pub games_played: i32,
     pub games_won: i32,
+    pub wallet: i32,
 }
 
 // #[derive(Debug)]
@@ -51,17 +52,19 @@ impl Database {
         Ok(row.map(|r| r.get(0)))
     }
 
-    pub async fn player_stats(&self, player_id: &str) -> Result<PlayerStats, sqlx::Error> {
+
+    pub async fn player_stats(&self, username: &str) -> Result<PlayerStats, sqlx::Error> {
         let row = sqlx::query(
-            "SELECT COUNT(*) AS games_played, SUM(won) AS games_won FROM games WHERE player_id = ?1",
+            "SELECT games_played, games_won, wallet FROM players WHERE name = ?1",
         )
-        .bind(player_id)
+        .bind(username)
         .fetch_one(&*self.pool)
         .await?;
 
         Ok(PlayerStats {
             games_played: row.get(0),
             games_won: row.get(1),
+            wallet: row.get(2),
         })
     }
 
@@ -86,3 +89,6 @@ impl Database {
         Ok(())
     }
 }
+
+
+    

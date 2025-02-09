@@ -39,6 +39,8 @@ pub const FAILED: i32 = 101;
 pub const SERVER_FULL: i32 = 102;
 pub const GAME_LOBBY_EMPTY: i32 = 103;
 pub const GAME_LOBBY_NOT_EMPTY: i32 = 104;
+pub const GAME_LOBBY_FULL: i32 = 105;
+
 
 // Define Player struct
 #[derive(Clone)]
@@ -208,8 +210,13 @@ impl Lobby {
     pub async fn add_player(&mut self, mut player: Player) {
         let mut players = self.players.lock().await;
         player.state = IN_LOBBY;
-        self.current_player_count += 1;
         players.push(player);
+        self.current_player_count += 1;
+        if self.current_player_count == self.max_player_count {
+            self.game_state = GAME_LOBBY_FULL;
+        } else {
+            self.game_state = JOINABLE;
+        }
     }
 
     pub async fn remove_player(&mut self, username: String) -> i32 {
@@ -219,6 +226,8 @@ impl Lobby {
         self.current_player_count -= 1;
         if self.current_player_count == 0 {
             return GAME_LOBBY_EMPTY;
+        } else {
+            self.game_state = JOINABLE;
         }
         GAME_LOBBY_NOT_EMPTY
     }
@@ -240,13 +249,14 @@ impl Lobby {
         }
     }
 
-    pub async fn get_lobby_names(&self) -> Vec<String> {
+    pub async fn get_lobby_names_and_status(&self) -> Vec<(String, i32)> {
         let lobbies = self.lobbies.lock().await;
-        let mut names = Vec::new();
+        let mut names_and_status = Vec::new();
         for lobby in lobbies.iter() {
-            names.push(lobby.lock().await.name.clone());
+            let lobby_guard = lobby.lock().await;
+            names_and_status.push((lobby_guard.name.clone(), lobby_guard.game_state));
         }
-        names
+        names_and_status
     }
 
     pub async fn lobby_exists(&self, lobby_name: String) -> bool {
@@ -819,9 +829,8 @@ impl Lobby {
                 }
                 DEAL_CARDS => {
                     self.broadcast("Dealing cards...".to_string()).await;
-                    self.deal_cards().await;
-                    // display each players hands to them
-                    // self.display_hand().await;
+                    self.deck.shuffle(); // shuffle card deck
+                    self.deal_cards().await; // deal and display each players hands to them
                     self.game_state = FIRST_BETTING_ROUND;
                 }
                 FIRST_BETTING_ROUND => {
@@ -857,7 +866,7 @@ impl Lobby {
                 UPDATE_DB => {
                     self.update_db().await;
                     break;
-                }
+               }
                 _ => {
                     panic!("Invalid game state: {}", self.game_state);
                 }
@@ -974,73 +983,4 @@ fn get_hand_type(hand: &[i32]) -> (i32, i32, i32, i32, i32, i32) {
     (1, ranks[4], ranks[3], ranks[2], ranks[1], ranks[0])
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
 
-
-//     async fn create_test_lobby(){
-//         let mut lobby = Lobby::new(Some(5), "Test Lobby".to_string()).await;
-
-//         // Create test players
-//         let (tx1, _rx1) = mpsc::unbounded_channel();
-//         let (tx2, _rx2) = mpsc::unbounded_channel();
-//         let player1 = Player {
-//             name: "Player1".to_string(),
-//             id: "1".to_string(),
-//             hand: vec![],
-//             wallet: 100,
-//             tx: tx1,
-//             rx: Arc::new(Mutex::new(_rx1)),
-//             state: IN_LOBBY,
-//             current_bet: 0,
-//             dealer: false,
-//             ready: true,
-//             games_played: 0,
-//             games_won: 0,
-//             lobby: Arc::new(Mutex::new(lobby.clone())),
-//         };
-//         let player2 = Player {
-//             name: "Player2".to_string(),
-//             id: "2".to_string(),
-//             hand: vec![],
-//             wallet: 100,
-//             tx: tx2,
-//             rx: Arc::new(Mutex::new(_rx2)),
-//             state: IN_LOBBY,
-//             current_bet: 0,
-//             dealer: false,
-//             ready: true,
-//             games_played: 0,
-//             games_won: 0,
-//             lobby: Arc::new(Mutex::new(lobby.clone())),
-//         };
-
-//         // Add players to the lobby
-//         lobby.add_player(player1.clone()).await;
-//         lobby.add_player(player2.clone()).await;
-//     }
-
-//     #[tokio::test]
-//     async fn test_betting_round() {
-//         // Create a test lobby
-//         create_test_lobby().await;
-
-//         // Add players to the lobby
-//         lobby.add_player(player1.clone()).await;
-//         lobby.add_player(player2.clone()).await;
-
-//         // Start a betting round
-//         lobby.betting_round(FIRST_BETTING_ROUND).await;
-
-//         // Check if the pot has been updated correctly
-//         assert_eq!(lobby.pot, 20); // Assuming both players bet 10 each
-
-//         // Check if player states have been updated correctly
-//         let players = lobby.players.lock().await;
-//         let player1 = players.iter().find(|p| p.name == "Player1").unwrap();
-//         let player2 = players.iter().find(|p| p.name == "Player2").unwrap();
-//         assert_eq!(player1.state, CALLED);
-//         assert_eq!(player2.state, CALLED);
-//     }
-// }

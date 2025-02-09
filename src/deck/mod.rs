@@ -29,7 +29,7 @@ impl Deck {
     //     ];
 
     // Shuffle the deck
-    fn shuffle(&mut self){
+    pub fn shuffle(&mut self){
         self.cards.shuffle(&mut rng());
         self.next_card_index = 0;
     }
