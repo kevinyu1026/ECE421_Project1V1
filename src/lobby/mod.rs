@@ -178,6 +178,14 @@ impl Lobby {
         }
     }
 
+    pub async fn listen_for_messages(&self, mut game_rx: mpsc::UnboundedReceiver<String>) -> String {
+        while let Some(message) = game_rx.recv().await {
+            println!("Received message: {}", message);
+            return message;
+        }
+        "".to_string()
+    }
+
     pub async fn increment_player_count(&mut self) {
         self.current_player_count += 1;
     }
@@ -254,10 +262,28 @@ impl Lobby {
         message
     }
 
+    // pub async fn broadcast(&self, message: String) {
+    //     let players = self.players.lock().await;
+    //     for player in players.iter() {
+    //         let _ = player.tx.send(Message::text(message.clone()));
+    //     }
+    // }
+
     pub async fn broadcast(&self, message: String) {
-        let players = self.players.lock().await;
+        println!("Broadcasting: {}", message);
+        let players_lock = self.players.lock();
+        let players = players_lock.await;
+        let mut tasks = Vec::new();
         for player in players.iter() {
-            let _ = player.tx.send(Message::text(message.clone()));
+            let tx = player.tx.clone();
+            let msg = Message::text(message.clone());
+            tasks.push(tokio::spawn(async move {
+                let _ = tx.send(msg);
+            }));
+        }
+        // Wait for all tasks to complete
+        for task in tasks {
+            let _ = task.await;
         }
     }
 
@@ -285,7 +311,9 @@ impl Lobby {
     }
 
     async fn betting_round(&mut self, round: i32) {
+
         let mut players = self.players.lock().await;
+        println!("Current round: {}", round);
         // ensure all players have current_bet set to 0
 
         for player in players.iter_mut() {
@@ -295,7 +323,7 @@ impl Lobby {
         let mut current_lobby_bet = 0; // resets to 0 every betting round
         let mut players_remaining = self.current_player_count;
 
-        while players_remaining > 1 {
+        while players_remaining > 0 {
             let player = &mut players[current_player_index as usize];
             if player.state == FOLDED || player.state == ALL_IN {
                 current_player_index = (current_player_index + 1) % self.current_player_count;
@@ -303,6 +331,7 @@ impl Lobby {
             }
             if round == ANTE {
                 if player.wallet > 10 {
+                    println!("Reached");
                     self.pot += 10;
                     player.wallet -= 10;
                     player.current_bet += 10;
@@ -319,6 +348,7 @@ impl Lobby {
                 let _ = player.tx.send(Message::text(message));
                 loop {
                     let choice = player.get_player_input().await;
+                    println!("player input: {}", choice.clone());
 
                     //
 
@@ -329,7 +359,8 @@ impl Lobby {
                         "1" => {
                             if current_lobby_bet == 0 {
                                 player.state = CHECKED;
-                                self.broadcast(format!("{} has checked.", player.name)).await;
+                                println!("checked");
+                                // self.broadcast(format!("{} has checked.", player.name)).await;
                                 players_remaining -= 1; // on valid moves, decrement the amount of players to make a move
                                 break;
                             } else {
@@ -429,6 +460,7 @@ impl Lobby {
             current_player_index = (current_player_index + 1) % self.current_player_count;
             // players_remaining -= 1; // ensure we give everyone a change to do an action
         }
+        println!("End of betting round: {}", round);
     }
 
     async fn drawing_round(&mut self){
@@ -588,6 +620,7 @@ impl Lobby {
     pub async fn start_game(&mut self){
         // change lobby state first so nobody can try to join anymore
         println!("Game started!");
+
         self.game_state = START_OF_ROUND;
         self.change_player_state(IN_GAME).await;
         

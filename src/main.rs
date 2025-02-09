@@ -311,8 +311,10 @@ async fn join_lobby(server_lobby: Arc<Mutex<Lobby>>, mut player: Player, db: Arc
 
     loop {
         let result = player.get_player_input().await;
-        println!("Player {} state: {}", player.name, player.state);
-        if player.state == lobby::IN_LOBBY {
+        let lobby_state = player_lobby.lock().await.game_state.clone();
+        let lobby_name = player_lobby.lock().await.name.clone();
+        println!("Lobby {} state: {}", lobby_name, lobby_state);
+        if player_lobby.lock().await.game_state == lobby::JOINABLE {
             match result.as_str() {
                 "Disconnect" => {
                     println!("{} has disconnected ------ here.", player.name);
@@ -380,6 +382,9 @@ async fn join_lobby(server_lobby: Arc<Mutex<Lobby>>, mut player: Player, db: Arc
                     }
                 }
             }
+        } else {
+            println!("Lobby in progress.");
+
         }
     }
     return "Normal".to_string();
