@@ -804,14 +804,6 @@ impl Lobby {
         // change lobby state first so nobody can try to join anymore
         println!("Game started!");
 
-        // await all players to ready up
-
-
-        //
-
-        
-
-
         self.game_state = START_OF_ROUND;
         self.change_player_state(IN_GAME).await;
 
