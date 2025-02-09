@@ -333,17 +333,24 @@ impl Lobby {
         println!("Current round: {}", round);
         // ensure all players have current_bet set to 0
 
-        for player in players.iter_mut() {
-            player.current_bet = 0;
-        }
         let mut current_player_index = self.first_betting_player;
         let mut current_lobby_bet = 0; // resets to 0 every betting round
         let mut players_remaining = self.current_player_count;
-
+        let mut check_flag = false;
+        if round == FIRST_BETTING_ROUND {
+            current_lobby_bet = 10; // first betting round starts with the ante
+            check_flag = true; // players can check if its first betting round with ante
+        }
+        else {
+            for player in players.iter_mut() {
+                player.current_bet = 0;
+            }
+        }
         while players_remaining > 0 {
             let player = &mut players[current_player_index as usize];
             if player.state == FOLDED || player.state == ALL_IN {
                 current_player_index = (current_player_index + 1) % self.current_player_count;
+                players_remaining -= 1;
                 continue;
             }
             if round == ANTE {
@@ -374,7 +381,7 @@ impl Lobby {
 
                     match choice.as_str() {
                         "1" => {
-                            if current_lobby_bet == 0 {
+                            if current_lobby_bet == 0 || check_flag == true {
                                 player.state = CHECKED;
                                 println!("checked");
                                 // self.broadcast(format!("{} has checked.", player.name)).await;
@@ -386,8 +393,16 @@ impl Lobby {
                             }
                         }
                         "2" => {
+                            if player.state == RAISED {
+                                player.tx.send(Message::text("You've already raised this round.\nCall or fold.")).ok();
+                                continue;
+                            }
                             let bet_diff = current_lobby_bet - player.current_bet;
                             if current_lobby_bet > 0 {
+                                if player.wallet <= (current_lobby_bet - player.current_bet) {
+                                    player.tx.send(Message::text("Invalid move: not enough cash to raise.\nCall or fold.")).ok();
+                                    continue;
+                                }
                                 // print the minimum the player has to bet to stay in the game
                                 let _ = player.tx.send(Message::text(format!("Current minimum bet is: {}", bet_diff)));
                             }
@@ -418,14 +433,14 @@ impl Lobby {
                                         current_lobby_bet = player.current_bet;
 
                                         // self.broadcast(format!("{} has raised the pot to: {}", player.name, player.current_bet)).await;
-                                        self.lobby_wide_send(players_tx.clone(), format!("{} has raised the pot to: {}", player.name, player.current_bet)).await;
+                                        self.lobby_wide_send(players_tx.clone(), format!("{} has raised the pot to: {}", player.name, self.pot)).await;
                                         // reset the betting cycle so every player calls/raises the new max bet or folds
                                         players_remaining = self.current_player_count - 1;
+                                        check_flag = false;
                                         break;
                                     }
                                 } else {
-                                    player
-                                        .tx.send(Message::text("Invalid raise : not a number.")).ok();
+                                    player.tx.send(Message::text("Invalid raise : not a number.")).ok();
                                 }
                             }
                             break;
@@ -434,6 +449,8 @@ impl Lobby {
                             let call_amount = current_lobby_bet - player.current_bet;
                             if call_amount > player.wallet {
                                 player.tx.send(Message::text("Invalid move: not enough cash.\nAll in or fold!")).ok();
+                            } else if call_amount == 0 {
+                                player.tx.send(Message::text("Invalid move: no bet to call.")).ok();
                             } else {
                                 player.wallet -= call_amount;
                                 player.current_bet += call_amount;
@@ -455,6 +472,10 @@ impl Lobby {
                         "5" => {
                             // all in
                             // side pots not considered yet
+                            if player.state == RAISED {
+                                player.tx.send(Message::text("You've already raised this round.\nCall or fold.")).ok();
+                                continue;
+                            }
                             if player.wallet > 0 {
                                 self.pot += player.wallet;
                                 player.current_bet += player.wallet;
@@ -465,9 +486,10 @@ impl Lobby {
                                 player.state = ALL_IN;
                                 // self.broadcast(format!("{} has gone all in!", player.name)).await;
                                 self.lobby_wide_send(players_tx.clone(), format!("{} has gone all in!", player.name)).await;
-                                players_remaining -= 1;
+                                players_remaining = self.current_player_count - 1; // reset the betting cycle
                                 break;
                             }
+                            check_flag = false;
                         },
                         "Disconnected" => {
                             // self.broadcast(format!("{} has disconnected and folded.", player.name)).await;
