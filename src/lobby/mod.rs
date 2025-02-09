@@ -6,6 +6,8 @@ use sqlx::SqlitePool;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, mpsc::UnboundedSender};
 use warp::{filters::ws::WebSocket, ws::Message};
+// use warp::filters::ws::SplitStream;
+
 
 // Lobby attribute definitions
 pub const MAX_PLAYER_COUNT: i32 = 5;
@@ -115,7 +117,7 @@ impl Player {
                         }
                         return return_string;
                     }
-                }
+                },
                 Err(e) => {
                     eprintln!("Error: {}", e);
                     return_string = "Error".to_string();
@@ -324,6 +326,16 @@ impl Lobby {
                 player.hand.push(self.deck.deal());
             }
         }
+        // print the hands to the players
+        let players_tx = players.iter()
+            .filter(|p| p.state != FOLDED)
+            .map(|p| p.tx.clone())
+            .collect::<Vec<_>>(); // get all tx's
+        let players_hands = players.iter()
+            .filter(|p| p.state != FOLDED)
+            .map(|p| p.hand.clone())
+            .collect::<Vec<_>>(); // get all hands
+        self.display_hand(players_tx.clone(), players_hands.clone()).await;
     }
 
     async fn betting_round(&mut self, round: i32) {
@@ -519,11 +531,22 @@ impl Lobby {
         //Once the cards are swap we will quickly display the cards to the player only.
         //Once all players have swapped their cards, we will move to the next betting round
         let mut players = self.players.lock().await;
-        let players_tx = players.iter().map(|p| p.tx.clone()).collect::<Vec<_>>();
+    
+        let players_tx = players.iter()
+            .filter(|p| p.state != FOLDED)
+            .map(|p| p.tx.clone())
+            .collect::<Vec<_>>(); // get all tx's
+        let players_hands = players.iter()
+            .filter(|p| p.state != FOLDED)
+            .map(|p| p.hand.clone())
+            .collect::<Vec<_>>(); // get all hands
+
+        self.display_hand(players_tx.clone(), players_hands.clone()).await;
         for player in players.iter_mut(){
             if player.state == FOLDED || player.state == ALL_IN {continue};
             println!("Drawing round for: {}", player.name);
-            // self.display_hand().await;
+
+            player.tx.send(Message::text("Drawing round!")).ok();
             let message = format!(
                 //displays the user hand
                 "Choose an option:\n    stand_pat\n    exchange [indicies you wanna exchange(comma seperated)]"
@@ -544,40 +567,41 @@ impl Lobby {
                             continue;
                         }
                         let indices: Vec<usize> = indices_str
-            .split(',')
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty()) // Ensure no empty values
-            .filter_map(|s| s.parse().ok()) // Convert to numbers
-            .collect();
+                        .split(',')
+                        .map(|s| s.trim())
+                        .filter(|s| !s.is_empty()) // Ensure no empty values
+                        .filter_map(|s| s.parse().ok()) // Convert to numbers
+                        .collect();
 
-            let mut valid_indices: Vec<usize> = indices
-                .iter()
-                .cloned()
-                .filter(|&i| i > 0 && i <= player.hand.len()) // Ensure within bounds
-                .map(|i| i - 1) // Convert to zero-based index
-                .collect();
+                        let mut valid_indices: Vec<usize> = indices
+                            .iter()
+                            .cloned()
+                            .filter(|&i| i > 0 && i <= player.hand.len()) // Ensure within bounds
+                            .map(|i| i - 1) // Convert to zero-based index
+                            .collect();
 
-            valid_indices.sort();
-            valid_indices.dedup(); // Ensure uniqueness
+                        valid_indices.sort();
+                        valid_indices.dedup(); // Ensure uniqueness
 
-            if valid_indices.len() == indices.len() && !valid_indices.is_empty() {
-                let mut new_hand = Vec::new();
-                for (i, card) in player.hand.iter().enumerate() {
-                    if !valid_indices.contains(&i) {
-                        new_hand.push(*card);
+                        if valid_indices.len() == indices.len() && !valid_indices.is_empty() {
+                            let mut new_hand = Vec::new();
+                            for (i, card) in player.hand.iter().enumerate() {
+                                if !valid_indices.contains(&i) {
+                                    new_hand.push(*card);
+                                }
+                            }
+                            for _ in &valid_indices {
+                                new_hand.push(self.deck.deal());
+                            }
+                            player.hand = new_hand;
+                            self.lobby_wide_send(players_tx.clone(),format!("{} has exchanged {} cards.", player.name, valid_indices.len())).await;
+                            break;
+                        } 
+                        else {
+                            let _ = player.tx.send(Message::text("Invalid indices. Ensure they are within range and correctly formatted."));
+                        }
                     }
                 }
-                for _ in &valid_indices {
-                    new_hand.push(self.deck.deal());
-                }
-                player.hand = new_hand;
-                self.lobby_wide_send(players_tx.clone(),format!("{} has exchanged {} cards.", player.name, valid_indices.len())).await;
-                break;
-            } else {
-                let _ = player.tx.send(Message::text("Invalid indices. Ensure they are within range and correctly formatted."));
-            }
-        }
-    }
                 else if input.starts_with("Disconnected") {
                     // self.broadcast(format!("{} has disconnected and folded.", player.name)).await;
                     self.lobby_wide_send(players_tx.clone(), format!("{} has disconnected.", player.name)).await;
@@ -663,20 +687,34 @@ impl Lobby {
         return cardStr;
     }
 
-    async fn display_hand(&self) {
-        let mut players = self.players.lock().await;
+    async fn display_hand(&self, players_tx: Vec<UnboundedSender<Message>>, players_hands: Vec<Vec<i32>>) {
+        // let players = self.players;
         let mut message: String;
-
-        for player in players.iter_mut() {
+        let mut index = 0;
+        for tx in players_tx.iter().cloned(){
             let mut translated_cards: String = Default::default();
-            for card in &player.hand {
-                translated_cards.push_str(&self.translate_card(*card).await);
+            for card in players_hands[index].iter().cloned() {
+                translated_cards.push_str(&self.translate_card(card.clone()).await);
                 translated_cards.push_str(", ");
             }
             message = format!("Your hand: {}", translated_cards.trim_end_matches(", "));
-            let _ = player.tx.send(Message::text(message.clone()));
+            let _ = tx.send(Message::text(message.clone()));
+            index += 1;
         }
     }
+
+    // 
+    // async fn update_db(&self) {
+    //     // update the database with the new player stats
+    //     let players = self.players.lock().await;
+    //     for player in players.iter() {
+    //         self.game_db.update_player_stats(&player).await.unwrap();
+    //     }
+    // }
+
+    // async fn get_tx_vec(&self) {
+        
+    // }
 
     pub async fn start_game(&mut self){
         // change lobby state first so nobody can try to join anymore
@@ -704,7 +742,7 @@ impl Lobby {
                     self.broadcast("Dealing cards...".to_string()).await;
                     self.deal_cards().await;
                     // display each players hands to them
-                    self.display_hand().await;
+                    // self.display_hand().await;
                     self.game_state = FIRST_BETTING_ROUND;
                 }
                 FIRST_BETTING_ROUND => {
@@ -716,13 +754,12 @@ impl Lobby {
                 DRAW => {
                     self.broadcast("Drawing round!".to_string()).await;
                     self.drawing_round().await;
-                    self.display_hand().await;
+                    // self.display_hand().await;
                     self.game_state = SECOND_BETTING_ROUND;
                 }
                 SECOND_BETTING_ROUND => {
                     self.broadcast("Second betting round!".to_string()).await;
                     self.betting_round(FIRST_BETTING_ROUND).await;
-                    self.game_state = DRAW;
                     self.broadcast(format!("Second betting round complete!\nCurrent pot: {}", self.pot)).await;
                     self.game_state = SHOWDOWN;
                 }
@@ -851,13 +888,3 @@ fn get_hand_type(hand: &[i32]) -> (i32, i32, i32, i32, i32, i32) {
     // High card
     (1, ranks[4], ranks[3], ranks[2], ranks[1], ranks[0])
 }
-
-//implementations
-
-// fn main() {
-//     let mut input = String::new();
-//     std::io::stdin().read_line(&mut input).expect("Failed to read line");
-//     let hand: Vec<i32> = input.trim().split_whitespace().map(|s| s.parse().unwrap()).collect();
-//     let hand_type = get_hand_type(&hand);
-//     println!("{:?}", hand_type);
-// }
