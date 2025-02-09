@@ -40,6 +40,7 @@ pub const FAILED: i32 = 101;
 pub const SERVER_FULL: i32 = 102;
 pub const GAME_LOBBY_EMPTY: i32 = 103;
 pub const GAME_LOBBY_NOT_EMPTY: i32 = 104;
+pub const GAME_LOBBY_FULL: i32 = 105;
 
 
 // Define Player struct
@@ -203,8 +204,13 @@ impl Lobby {
     pub async fn add_player(&mut self, mut player: Player) {
         let mut players = self.players.lock().await;
         player.state = IN_LOBBY;
-        self.current_player_count += 1;
         players.push(player);
+        self.current_player_count += 1;
+        if self.current_player_count == self.max_player_count {
+            self.game_state = GAME_LOBBY_FULL;
+        } else {
+            self.game_state = JOINABLE;
+        }
     }
 
     pub async fn remove_player(&mut self, username: String) -> i32{
@@ -214,6 +220,8 @@ impl Lobby {
         self.current_player_count -= 1;
         if self.current_player_count == 0{
             return GAME_LOBBY_EMPTY;
+        } else {
+            self.game_state = JOINABLE;
         }
         GAME_LOBBY_NOT_EMPTY
     }
@@ -235,13 +243,14 @@ impl Lobby {
         }
     }
 
-    pub async fn get_lobby_names(&self) -> Vec<String> {
+    pub async fn get_lobby_names_and_status(&self) -> Vec<(String, i32)> {
         let lobbies = self.lobbies.lock().await;
-        let mut names = Vec::new();
+        let mut names_and_status = Vec::new();
         for lobby in lobbies.iter() {
-            names.push(lobby.lock().await.name.clone());
+            let lobby_guard = lobby.lock().await;
+            names_and_status.push((lobby_guard.name.clone(), lobby_guard.game_state));
         }
-        names
+        names_and_status
     }
 
     pub async fn lobby_exists(&self, lobby_name: String) -> bool {
@@ -720,6 +729,14 @@ impl Lobby {
         // change lobby state first so nobody can try to join anymore
         println!("Game started!");
 
+        // await all players to ready up
+
+
+        //
+
+        
+
+
         self.game_state = START_OF_ROUND;
         self.change_player_state(IN_GAME).await;
         
@@ -770,7 +787,6 @@ impl Lobby {
                     self.game_state = UPDATE_DB;
                 }
                 UPDATE_DB => {
-
                     self.game_state = IN_LOBBY;
                 }
                 _ => {
