@@ -428,6 +428,7 @@ impl Lobby {
                                         .tx.send(Message::text("Invalid raise : not a number.")).ok();
                                 }
                             }
+                            break;
                         }
                         "3" => {
                             let call_amount = current_lobby_bet - player.current_bet;
