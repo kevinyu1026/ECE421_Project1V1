@@ -862,7 +862,7 @@ impl Lobby {
                 }
                 UPDATE_DB => {
                     break;
-                }
+               }
                 _ => {
                     panic!("Invalid game state: {}", self.game_state);
                 }
@@ -979,73 +979,4 @@ fn get_hand_type(hand: &[i32]) -> (i32, i32, i32, i32, i32, i32) {
     (1, ranks[4], ranks[3], ranks[2], ranks[1], ranks[0])
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
 
-
-//     async fn create_test_lobby(){
-//         let mut lobby = Lobby::new(Some(5), "Test Lobby".to_string()).await;
-
-//         // Create test players
-//         let (tx1, _rx1) = mpsc::unbounded_channel();
-//         let (tx2, _rx2) = mpsc::unbounded_channel();
-//         let player1 = Player {
-//             name: "Player1".to_string(),
-//             id: "1".to_string(),
-//             hand: vec![],
-//             wallet: 100,
-//             tx: tx1,
-//             rx: Arc::new(Mutex::new(_rx1)),
-//             state: IN_LOBBY,
-//             current_bet: 0,
-//             dealer: false,
-//             ready: true,
-//             games_played: 0,
-//             games_won: 0,
-//             lobby: Arc::new(Mutex::new(lobby.clone())),
-//         };
-//         let player2 = Player {
-//             name: "Player2".to_string(),
-//             id: "2".to_string(),
-//             hand: vec![],
-//             wallet: 100,
-//             tx: tx2,
-//             rx: Arc::new(Mutex::new(_rx2)),
-//             state: IN_LOBBY,
-//             current_bet: 0,
-//             dealer: false,
-//             ready: true,
-//             games_played: 0,
-//             games_won: 0,
-//             lobby: Arc::new(Mutex::new(lobby.clone())),
-//         };
-
-//         // Add players to the lobby
-//         lobby.add_player(player1.clone()).await;
-//         lobby.add_player(player2.clone()).await;
-//     }
-
-//     #[tokio::test]
-//     async fn test_betting_round() {
-//         // Create a test lobby
-//         create_test_lobby().await;
-
-//         // Add players to the lobby
-//         lobby.add_player(player1.clone()).await;
-//         lobby.add_player(player2.clone()).await;
-
-//         // Start a betting round
-//         lobby.betting_round(FIRST_BETTING_ROUND).await;
-
-//         // Check if the pot has been updated correctly
-//         assert_eq!(lobby.pot, 20); // Assuming both players bet 10 each
-
-//         // Check if player states have been updated correctly
-//         let players = lobby.players.lock().await;
-//         let player1 = players.iter().find(|p| p.name == "Player1").unwrap();
-//         let player2 = players.iter().find(|p| p.name == "Player2").unwrap();
-//         assert_eq!(player1.state, CALLED);
-//         assert_eq!(player2.state, CALLED);
-//     }
-// }
