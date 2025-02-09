@@ -1,13 +1,12 @@
 //!
 use super::*;
 use crate::Deck;
-use futures_util::future::ready;
+use futures_util::future::{ready, Join};
 use sqlx::SqlitePool;
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex, mpsc::UnboundedSender};
+use tokio::sync::{mpsc, mpsc::UnboundedSender, Mutex};
 use warp::{filters::ws::WebSocket, ws::Message};
 // use warp::filters::ws::SplitStream;
-
 
 // Lobby attribute definitions
 pub const MAX_PLAYER_COUNT: i32 = 5;
@@ -41,7 +40,6 @@ pub const SERVER_FULL: i32 = 102;
 pub const GAME_LOBBY_EMPTY: i32 = 103;
 pub const GAME_LOBBY_NOT_EMPTY: i32 = 104;
 
-
 // Define Player struct
 #[derive(Clone)]
 pub struct Player {
@@ -64,10 +62,14 @@ impl Player {
     pub async fn remove_player(&self, server_lobby: Arc<Mutex<Lobby>>, db: Arc<Database>) {
         db.update_player_stats(&self).await.unwrap();
 
-        server_lobby.lock().await
+        server_lobby
+            .lock()
+            .await
             .remove_player(self.name.clone())
             .await;
-        server_lobby.lock().await
+        server_lobby
+            .lock()
+            .await
             .broadcast(format!("{} has left the server.", self.name))
             .await;
     }
@@ -84,24 +86,22 @@ impl Player {
                         match self.state {
                             IN_GAME => {
                                 self.state = IN_LOBBY;
-                            },
+                            }
                             ANTE => {
                                 self.state = FOLDED;
-                            },
+                            }
                             DEAL_CARDS => {
                                 self.state = FOLDED;
-                            },
+                            }
                             FIRST_BETTING_ROUND => {
                                 self.state = FOLDED;
-
-                            },
+                            }
                             DRAW => {
                                 self.state = FOLDED;
-
-                            },
+                            }
                             SECOND_BETTING_ROUND => {
                                 self.state = FOLDED;
-                            },
+                            }
                             _ => {
                                 self.state = IN_LOBBY;
                             }
@@ -117,7 +117,7 @@ impl Player {
                         }
                         return return_string;
                     }
-                },
+                }
                 Err(e) => {
                     eprintln!("Error: {}", e);
                     return_string = "Error".to_string();
@@ -128,7 +128,11 @@ impl Player {
         return return_string;
     }
 
-    pub async fn player_join_lobby(&mut self, server_lobby: Arc<Mutex<Lobby>>, lobby_name: String) -> i32 {
+    pub async fn player_join_lobby(
+        &mut self,
+        server_lobby: Arc<Mutex<Lobby>>,
+        lobby_name: String,
+    ) -> i32 {
         let lobbies = server_lobby.lock().await.lobbies.lock().await.clone();
         println!("Lobby name entered: {}", lobby_name);
         for lobby in lobbies {
@@ -146,8 +150,6 @@ impl Player {
         FAILED
     }
 }
-
-
 
 #[derive(Clone)]
 pub struct Lobby {
@@ -180,7 +182,10 @@ impl Lobby {
         }
     }
 
-    pub async fn listen_for_messages(&self, mut game_rx: mpsc::UnboundedReceiver<String>) -> String {
+    pub async fn listen_for_messages(
+        &self,
+        mut game_rx: mpsc::UnboundedReceiver<String>,
+    ) -> String {
         while let Some(message) = game_rx.recv().await {
             println!("Received message: {}", message);
             return message;
@@ -207,12 +212,12 @@ impl Lobby {
         players.push(player);
     }
 
-    pub async fn remove_player(&mut self, username: String) -> i32{
+    pub async fn remove_player(&mut self, username: String) -> i32 {
         let mut players = self.players.lock().await;
         players.retain(|p| p.name != username);
-        println!("Player removed from {}: {}",self.name, username);
+        println!("Player removed from {}: {}", self.name, username);
         self.current_player_count -= 1;
-        if self.current_player_count == 0{
+        if self.current_player_count == 0 {
             return GAME_LOBBY_EMPTY;
         }
         GAME_LOBBY_NOT_EMPTY
@@ -288,7 +293,11 @@ impl Lobby {
         }
     }
 
-    pub async fn lobby_wide_send(&self, players_tx: Vec<UnboundedSender<Message>>, message: String) {
+    pub async fn lobby_wide_send(
+        &self,
+        players_tx: Vec<UnboundedSender<Message>>,
+        message: String,
+    ) {
         let mut tasks = Vec::new();
         for tx in players_tx.iter().cloned() {
             let msg = Message::text(message.clone());
@@ -302,7 +311,7 @@ impl Lobby {
         }
     }
 
-    pub async fn ready_up(&self, username: String) -> (i32,i32) {
+    pub async fn ready_up(&self, username: String) -> (i32, i32) {
         let mut players = self.players.lock().await;
         // self.broadcast(format!("{} is ready!", username)).await;
         if let Some(player) = players.iter_mut().find(|p| p.name == username) {
@@ -315,7 +324,8 @@ impl Lobby {
             }
         }
         let players_tx = players.iter().map(|p| p.tx.clone()).collect::<Vec<_>>();
-        self.lobby_wide_send(players_tx, format!("{} is ready!", username)).await;
+        self.lobby_wide_send(players_tx, format!("{} is ready!", username))
+            .await;
         return (ready_player_count, self.current_player_count);
     }
 
@@ -327,19 +337,21 @@ impl Lobby {
             }
         }
         // print the hands to the players
-        let players_tx = players.iter()
+        let players_tx = players
+            .iter()
             .filter(|p| p.state != FOLDED)
             .map(|p| p.tx.clone())
             .collect::<Vec<_>>(); // get all tx's
-        let players_hands = players.iter()
+        let players_hands = players
+            .iter()
             .filter(|p| p.state != FOLDED)
             .map(|p| p.hand.clone())
             .collect::<Vec<_>>(); // get all hands
-        self.display_hand(players_tx.clone(), players_hands.clone()).await;
+        self.display_hand(players_tx.clone(), players_hands.clone())
+            .await;
     }
 
     async fn betting_round(&mut self, round: i32) {
-
         let mut players = self.players.lock().await;
         let players_tx = players.iter().map(|p| p.tx.clone()).collect::<Vec<_>>();
         println!("Current round: {}", round);
@@ -349,11 +361,33 @@ impl Lobby {
         let mut current_lobby_bet = 0; // resets to 0 every betting round
         let mut players_remaining = self.current_player_count;
         let mut check_flag = false;
+        let mut folded_count = 0;
+        let mut all_folded = false;
+
+        if round == ANTE {
+            let mut total_contributors = 0;
+            for player in players.iter_mut() {
+                if player.wallet > 10 {
+                    println!("Player {} antes 10.", player.name);
+                    self.pot += 10;
+                    player.wallet -= 10;
+                    player.current_bet += 10;
+                    total_contributors += 1;
+                } else {
+                    player.state = FOLDED;
+                }
+            }
+            println!(
+                "Total ante contributions: {}, Expected: {}",
+                total_contributors * 10,
+                self.current_player_count * 10
+            );
+            return;
+        }
         if round == FIRST_BETTING_ROUND {
             current_lobby_bet = 10; // first betting round starts with the ante
             check_flag = true; // players can check if its first betting round with ante
-        }
-        else {
+        } else {
             for player in players.iter_mut() {
                 player.current_bet = 0;
             }
@@ -365,164 +399,190 @@ impl Lobby {
                 players_remaining -= 1;
                 continue;
             }
-            if round == ANTE {
-                if player.wallet > 10 {
-                    println!("Reached");
-                    self.pot += 10;
-                    player.wallet -= 10;
-                    player.current_bet += 10;
-                    players_remaining -= 1;
-                }
-                else {
-                    player.state = FOLDED; // they couldnt afford ANTE, gettt emmm outttt
-                }
-            } else {
-                let message = format!(
-                    "Choose an option:\n1. Check\n2. Raise\n3. Call\n4. Fold\n5. All-in\n\nCurrent bet: {}\nCurrent Pot: {}",
-                    player.current_bet, self.pot
+            // if round == ANTE {
+            //     if player.wallet > 10 {
+            //         println!("Reached");
+            //         self.pot += 10;
+            //         player.wallet -= 10;
+            //         player.current_bet += 10;
+            //         players_remaining -= 1;
+            //     }
+            //     else {
+            //         player.state = FOLDED; // they couldnt afford ANTE, gettt emmm outttt
+            //     }
+            // } else {
+            let message = format!(
+                    "Choose an option:\n1. Check\n2. Raise\n3. Call\n4. Fold\n5. All-in\n\nYour amount to call: {}\nCurrent Pot: {}",
+                    (current_lobby_bet - player.current_bet), self.pot
                 );
-                let _ = player.tx.send(Message::text(message));
-                loop {
-                    let choice = player.get_player_input().await;
-                    println!("player input: {}", choice.clone());
+            let _ = player.tx.send(Message::text(message));
+            loop {
+                let choice = player.get_player_input().await;
+                println!("player input: {}", choice.clone());
 
-                    //
-
-                        
-                    //
-
-                    match choice.as_str() {
-                        "1" => {
-                            if current_lobby_bet == 0 || check_flag == true {
-                                player.state = CHECKED;
-                                println!("checked");
-                                // self.broadcast(format!("{} has checked.", player.name)).await;
-                                self.lobby_wide_send(players_tx.clone(), format!("{} has checked.", player.name)).await;
-                                players_remaining -= 1; // on valid moves, decrement the amount of players to make a move
-                                break;
-                            } else {
-                                player.tx.send(Message::text("Invalid move: You can't check, there's a bet to call.",)).ok();
-                            }
+                match choice.as_str() {
+                    "1" => {
+                        if current_lobby_bet == 0 || check_flag == true {
+                            player.state = CHECKED;
+                            println!("checked");
+                            // self.broadcast(format!("{} has checked.", player.name)).await;
+                            self.lobby_wide_send(
+                                players_tx.clone(),
+                                format!("{} has checked.", player.name),
+                            ).await;
+                            players_remaining -= 1; // on valid moves, decrement the amount of players to make a move
+                            break;
+                        } else {
+                            player
+                                .tx
+                                .send(Message::text(
+                                    "Invalid move: You can't check, there's a bet to call.",
+                                ))
+                                .ok();
                         }
-                        "2" => {
-                            if player.state == RAISED {
-                                player.tx.send(Message::text("You've already raised this round.\nCall or fold.")).ok();
+                    }
+                    "2" => {
+                        if player.state == RAISED {
+                            player.tx.send(Message::text("You've already raised this round.\nCall or fold.",)).ok();
+                            continue;
+                        }
+                        let bet_diff = current_lobby_bet - player.current_bet;
+                        if current_lobby_bet > 0 {
+                            if player.wallet <= (current_lobby_bet - player.current_bet) {player.tx.send(Message::text("Invalid move: not enough cash to raise.\nCall or fold.",)).ok();
                                 continue;
                             }
-                            let bet_diff = current_lobby_bet - player.current_bet;
-                            if current_lobby_bet > 0 {
-                                if player.wallet <= (current_lobby_bet - player.current_bet) {
-                                    player.tx.send(Message::text("Invalid move: not enough cash to raise.\nCall or fold.")).ok();
-                                    continue;
-                                }
-                                // print the minimum the player has to bet to stay in the game
-                                let _ = player.tx.send(Message::text(format!("Current minimum bet is: {}", bet_diff)));
-                            }
-                            else {
-                                let _ = player.tx.send(Message::text("Bet must be greater than 0."));
-                            }
-                            let _ = player.tx.send(Message::text(format!("Your current bet is: {}\nYour wallet balance: {}", player.current_bet, player.wallet)));
-                            let _ = player.tx.send(Message::text("Enter your bet amount:"));
-                            loop {
-                                let bet_amount = player.get_player_input().await;
-                                if let Ok(bet) = bet_amount.parse::<i32>() {
-                                    // doesnt allow calling (all in case included) or raising if the player doesnt have enough money
-                                    if bet > player.wallet || bet <= bet_diff || bet <= 0 {
-                                        player.tx.send(Message::text("Invalid raise.")).ok();
-                                    }
-                                    else {
-                                        if bet == player.wallet {
-                                            player.state = ALL_IN;
-                                            // self.broadcast(format!("{} has gone all in!", player.name)).await;
-                                            self.lobby_wide_send(players_tx.clone(), format!("{} has gone all in!", player.name)).await;
-                                        }
-                                        else{
-                                            player.state = RAISED;
-                                        }
-                                        player.wallet -= bet;
-                                        player.current_bet += bet;
-                                        self.pot += bet;
-                                        current_lobby_bet = player.current_bet;
-
-                                        // self.broadcast(format!("{} has raised the pot to: {}", player.name, player.current_bet)).await;
-                                        self.lobby_wide_send(players_tx.clone(), format!("{} has raised the pot to: {}", player.name, self.pot)).await;
-                                        // reset the betting cycle so every player calls/raises the new max bet or folds
-                                        players_remaining = self.current_player_count - 1;
-                                        check_flag = false;
-                                        break;
-                                    }
+                            // print the minimum the player has to bet to stay in the game
+                            let _ = player.tx.send(Message::text(format!("Current minimum bet is: {}",bet_diff)));
+                        } else {
+                            let _ = player.tx.send(Message::text("Bet must be greater than 0."));
+                        }
+                        let _ = player.tx.send(Message::text(format!("Your current bet is: {}\nYour wallet balance: {}\nEnter your bet amount:", player.current_bet, player.wallet)));
+                        // let _ = player.tx.send(Message::text("Enter your bet amount:"));
+                        loop {
+                            let bet_amount = player.get_player_input().await;
+                            if let Ok(bet) = bet_amount.parse::<i32>() {
+                                // doesnt allow calling (all in case included) or raising if the player doesnt have enough money
+                                if bet > player.wallet || bet <= bet_diff || bet <= 0 {
+                                    player.tx.send(Message::text("Invalid raise.")).ok();
                                 } else {
-                                    player.tx.send(Message::text("Invalid raise : not a number.")).ok();
+                                    if bet == player.wallet {
+                                        player.state = ALL_IN;
+                                        // self.broadcast(format!("{} has gone all in!", player.name)).await;
+                                        self.lobby_wide_send(
+                                            players_tx.clone(),
+                                            format!("{} has gone all in!", player.name),
+                                        )
+                                        .await;
+                                    } else {
+                                        player.state = RAISED;
+                                    }
+                                    player.wallet -= bet;
+                                    player.current_bet += bet;
+                                    self.pot += bet;
+                                    current_lobby_bet = player.current_bet;
+
+                                    // self.broadcast(format!("{} has raised the pot to: {}", player.name, player.current_bet)).await;
+                                    self.lobby_wide_send(players_tx.clone(),format!("{} has raised the pot to: {}",player.name, self.pot),).await;
+                                    // reset the betting cycle so every player calls/raises the new max bet or folds
+                                    players_remaining = self.current_player_count - 1;
+                                    check_flag = false;
+                                    break;
                                 }
-                            }
-                            break;
-                        }
-                        "3" => {
-                            let call_amount = current_lobby_bet - player.current_bet;
-                            if call_amount > player.wallet {
-                                player.tx.send(Message::text("Invalid move: not enough cash.\nAll in or fold!")).ok();
-                            } else if call_amount == 0 {
-                                player.tx.send(Message::text("Invalid move: no bet to call.")).ok();
                             } else {
-                                player.wallet -= call_amount;
-                                player.current_bet += call_amount;
-                                self.pot += call_amount;
-                                player.state = CALLED;
-                                // self.broadcast(format!("{} has called the bet.", player.name)).await;
-                                self.lobby_wide_send(players_tx.clone(), format!("{} has called the bet.", player.name)).await;
-                                players_remaining -= 1;
-                                break;
+                                player.tx.send(Message::text("Invalid raise : not a number.")).ok();
                             }
                         }
-                        "4" => {
-                            player.state = FOLDED;
-                            // self.broadcast(format!("{} has folded.", player.name)).await;
-                            self.lobby_wide_send(players_tx.clone(), format!("{} has folded.", player.name)).await;
+                        break;
+                    }
+                    "3" => {
+                        let call_amount = current_lobby_bet - player.current_bet;
+                        print!("call amount: {}", call_amount);
+                        println!("current lobby bet: {}", current_lobby_bet);
+                        if current_lobby_bet == 0 || (self.game_state == FIRST_BETTING_ROUND && current_lobby_bet == 10)
+                        {
+                            player.tx.send(Message::text("Invalid move: no bet to call.")).ok();
+                        }
+                        // else if self.game_state == FIRST_BETTING_ROUND && current_lobby_bet == 10 {
+                        //     player.state = CHECKED;
+                        //     // self.broadcast(format!("{} has checked.", player.name)).await;
+                        //     self.lobby_wide_send(players_tx.clone(), format!("{} has checked.", player.name)).await;
+                        //     players_remaining -= 1;
+                        //     break;
+                        // }
+                        else if call_amount > player.wallet {
+                            player.tx.send(Message::text("Invalid move: not enough cash.\nAll in or fold!",)).ok();
+                        } else {
+                            player.wallet -= call_amount;
+                            player.current_bet += call_amount;
+                            self.pot += call_amount;
+                            player.state = CALLED;
+                            // self.broadcast(format!("{} has called the bet.", player.name)).await;
+                            self.lobby_wide_send(players_tx.clone(),format!("{} has called the bet.", player.name),).await;
                             players_remaining -= 1;
                             break;
                         }
-                        "5" => {
-                            // all in
-                            // side pots not considered yet
-                            if player.state == RAISED {
-                                player.tx.send(Message::text("You've already raised this round.\nCall or fold.")).ok();
-                                continue;
+                    }
+                    "4" => {
+                        player.state = FOLDED;
+                        // self.broadcast(format!("{} has folded.", player.name)).await;
+                        self.lobby_wide_send(players_tx.clone(),format!("{} has folded.", player.name),).await;
+                        folded_count += 1;
+
+                        if folded_count == self.current_player_count - 1 {
+                            all_folded = true;
+                            // self.lobby_wide_send(players_tx.clone(), message.clone()).await;
+                            self.game_state = SHOWDOWN; // if only one player left they won, send to showdown to handle the pot distribution
+                            println!("All but one player folded, moving to showdown.");
+                        }
+                        players_remaining -= 1;
+                        break;
+                    }
+                    "5" => {
+                        // all in
+                        // side pots not considered yet
+                        if player.state == RAISED {player.tx.send(Message::text("You've already raised this round.\nCall or fold.",)).ok();
+                            continue;
+                        }
+                        if player.wallet > 0 {
+                            self.pot += player.wallet;
+                            player.current_bet += player.wallet;
+                            player.wallet -= player.wallet;
+                            if player.current_bet > current_lobby_bet {
+                                current_lobby_bet = player.current_bet;
+                                // reset the betting cycle if it pot was raised
+                                players_remaining = self.current_player_count - 1;
+                            } else {
+                                players_remaining -= 1;
                             }
-                            if player.wallet > 0 {
-                                self.pot += player.wallet;
-                                player.current_bet += player.wallet;
-                                player.wallet -= player.wallet;
-                                if player.current_bet > current_lobby_bet {
-                                    current_lobby_bet = player.current_bet;
-                                }
-                                player.state = ALL_IN;
-                                // self.broadcast(format!("{} has gone all in!", player.name)).await;
-                                self.lobby_wide_send(players_tx.clone(), format!("{} has gone all in!", player.name)).await;
-                                players_remaining = self.current_player_count - 1; // reset the betting cycle
-                                break;
-                            }
-                            check_flag = false;
-                        },
-                        "Disconnected" => {
-                            // self.broadcast(format!("{} has disconnected and folded.", player.name)).await;
-                            self.lobby_wide_send(players_tx.clone(), format!("{} has disconnected and folded.", player.name)).await;
+                            player.state = ALL_IN;
+                            // self.broadcast(format!("{} has gone all in!", player.name)).await;
+                            self.lobby_wide_send(players_tx.clone(),format!("{} has gone all in!", player.name),).await;
                             break;
                         }
-                        _ => {
-                            player.tx.send(Message::text("Invalid action, try again.")).ok();
-                        }
+                        check_flag = false;
+                    }
+                    "Disconnected" => {
+                        // self.broadcast(format!("{} has disconnected and folded.", player.name)).await;
+                        self.lobby_wide_send(players_tx.clone(),format!("{} has disconnected and folded.", player.name)).await;
+                        break;
+                    }
+                    _ => {
+                        player.tx.send(Message::text("Invalid action, try again.")).ok();
                     }
                 }
             }
 
+            if all_folded == true {
+                break;
+            }
             // Move to next player
             current_player_index = (current_player_index + 1) % self.current_player_count;
             // players_remaining -= 1; // ensure we give everyone a change to do an action
         }
-        println!("End of betting round: {}", round);
+        // if all but one player folded, the remaining player wins the pot
     }
 
-    async fn drawing_round(&mut self){
+    async fn drawing_round(&mut self) {
         //As the drawing round starts, we will check if their status is folded, if it is, we will skip them
         //else we will continue the drawing round for that player and we will display a input menu of "Stand Pat or Exchange cards"
         //if the player chooses to exchange cards, we will remove the cards from their hand and deal them new cards the logic for this will be
@@ -531,12 +591,14 @@ impl Lobby {
         //Once the cards are swap we will quickly display the cards to the player only.
         //Once all players have swapped their cards, we will move to the next betting round
         let mut players = self.players.lock().await;
-    
-        let players_tx = players.iter()
+
+        let players_tx = players
+            .iter()
             .filter(|p| p.state != FOLDED)
             .map(|p| p.tx.clone())
             .collect::<Vec<_>>(); // get all tx's
-        let players_hands = players.iter()
+        let players_hands = players
+            .iter()
             .filter(|p| p.state != FOLDED)
             .map(|p| p.hand.clone())
             .collect::<Vec<_>>(); // get all hands
@@ -703,7 +765,7 @@ impl Lobby {
         // let players = self.players;
         let mut message: String;
         let mut index = 0;
-        for tx in players_tx.iter().cloned(){
+        for tx in players_tx.iter().cloned() {
             let mut translated_cards: String = Default::default();
             for card in players_hands[index].iter().cloned() {
                 translated_cards.push_str(&self.translate_card(card.clone()).await);
@@ -715,7 +777,7 @@ impl Lobby {
         }
     }
 
-    // 
+    //
     // async fn update_db(&self) {
     //     // update the database with the new player stats
     //     let players = self.players.lock().await;
@@ -725,17 +787,22 @@ impl Lobby {
     // }
 
     // async fn get_tx_vec(&self) {
-        
+
     // }
 
-    pub async fn start_game(&mut self){
+    pub async fn start_game(&mut self) {
         // change lobby state first so nobody can try to join anymore
         println!("Game started!");
 
         self.game_state = START_OF_ROUND;
         self.change_player_state(IN_GAME).await;
-        
+
         self.game_state_machine().await;
+
+        self.game_state = JOINABLE;
+        self.change_player_state(IN_LOBBY).await;
+        self.broadcast(format!("Welcome to lobby: {}\nChoose an option:\n1. Ready:           r\n2. Show Players:    p\n3. View stats:      s\n4. Quit:            q\n\n", self.name)).await;
+        return;
     }
 
     async fn game_state_machine(&mut self) {
@@ -758,13 +825,13 @@ impl Lobby {
                     self.game_state = FIRST_BETTING_ROUND;
                 }
                 FIRST_BETTING_ROUND => {
-                    self.broadcast("First betting round!".to_string()).await;
+                    self.broadcast("------First betting round!------".to_string()).await;
                     self.betting_round(FIRST_BETTING_ROUND).await;
                     self.game_state = DRAW;
                     self.broadcast(format!("First betting round complete!\nCurrent pot: {}", self.pot)).await;
                 }
                 DRAW => {
-                    self.broadcast("Drawing round!".to_string()).await;
+                    self.broadcast("------Drawing round!------".to_string()).await;
                     self.drawing_round().await;
                     // self.display_hand().await;
                     self.game_state = SECOND_BETTING_ROUND;
@@ -776,14 +843,15 @@ impl Lobby {
                     self.game_state = SHOWDOWN;
                 }
                 SHOWDOWN => {
+                    self.broadcast("------Showdown Round!------".to_string()).await;
+                    self.showdown().await;
                     self.game_state = END_OF_ROUND;
                 }
                 END_OF_ROUND => {
                     self.game_state = UPDATE_DB;
                 }
                 UPDATE_DB => {
-
-                    self.game_state = IN_LOBBY;
+                    break;
                 }
                 _ => {
                     panic!("Invalid game state: {}", self.game_state);
