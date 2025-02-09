@@ -829,9 +829,8 @@ impl Lobby {
                 }
                 DEAL_CARDS => {
                     self.broadcast("Dealing cards...".to_string()).await;
-                    self.deal_cards().await;
-                    // display each players hands to them
-                    // self.display_hand().await;
+                    self.deck.shuffle(); // shuffle card deck
+                    self.deal_cards().await; // deal and display each players hands to them
                     self.game_state = FIRST_BETTING_ROUND;
                 }
                 FIRST_BETTING_ROUND => {

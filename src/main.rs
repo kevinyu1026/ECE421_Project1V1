@@ -364,15 +364,15 @@ async fn join_lobby(server_lobby: Arc<Mutex<Lobby>>, mut player: Player, db: Arc
                             // let stats = db.get_player_stats(&username_id).await.unwrap();
                             // tx.send(Message::text(format!("Stats: {:?}", stats))).unwrap();
                             let stats = db.player_stats(&player.name).await;
-                        if let Ok(stats) = stats {
-                            tx.send(Message::text(format!(
-                                "Player Stats for {}: Games Played: {}, Games Won: {}",
-                                &player.name, stats.games_played, stats.games_won
-                            )))
-                            .unwrap();
-                        } else {
-                            tx.send(Message::text("Failed to retrieve stats.")).unwrap();
-                        }
+                            if let Ok(stats) = stats {
+                                tx.send(Message::text(format!(
+                                    "Player Stats for {}: Games Played: {}, Games Won: {}",
+                                    &player.name, stats.games_played, stats.games_won
+                                )))
+                                .unwrap();
+                            } else {
+                                tx.send(Message::text("Failed to retrieve stats.")).unwrap();
+                            }
                         }
                         "q" => {
                             // QUIT LOBBY------------------------
