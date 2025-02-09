@@ -852,7 +852,7 @@ impl Lobby {
                 }
                 UPDATE_DB => {
                     break;
-                }
+               }
                 _ => {
                     panic!("Invalid game state: {}", self.game_state);
                 }
@@ -968,3 +968,5 @@ fn get_hand_type(hand: &[i32]) -> (i32, i32, i32, i32, i32, i32) {
     // High card
     (1, ranks[4], ranks[3], ranks[2], ranks[1], ranks[0])
 }
+
+
