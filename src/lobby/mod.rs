@@ -4,7 +4,7 @@ use crate::Deck;
 use futures_util::future::ready;
 use sqlx::SqlitePool;
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, Mutex, mpsc::UnboundedSender};
 use warp::{filters::ws::WebSocket, ws::Message};
 
 // Lobby attribute definitions
@@ -271,8 +271,7 @@ impl Lobby {
 
     pub async fn broadcast(&self, message: String) {
         println!("Broadcasting: {}", message);
-        let players_lock = self.players.lock();
-        let players = players_lock.await;
+        let players = self.players.lock().await;
         let mut tasks = Vec::new();
         for player in players.iter() {
             let tx = player.tx.clone();
@@ -287,8 +286,23 @@ impl Lobby {
         }
     }
 
+    pub async fn lobby_wide_send(&self, players_tx: Vec<UnboundedSender<Message>>, message: String) {
+        let mut tasks = Vec::new();
+        for tx in players_tx.iter().cloned() {
+            let msg = Message::text(message.clone());
+            tasks.push(tokio::spawn(async move {
+                let _ = tx.send(msg);
+            }));
+        }
+        // Wait for all tasks to complete
+        for task in tasks {
+            let _ = task.await;
+        }
+    }
+
     pub async fn ready_up(&self, username: String) -> (i32,i32) {
         let mut players = self.players.lock().await;
+        // self.broadcast(format!("{} is ready!", username)).await;
         if let Some(player) = players.iter_mut().find(|p| p.name == username) {
             player.ready = true;
         }
@@ -298,6 +312,8 @@ impl Lobby {
                 ready_player_count += 1;
             }
         }
+        let players_tx = players.iter().map(|p| p.tx.clone()).collect::<Vec<_>>();
+        self.lobby_wide_send(players_tx, format!("{} is ready!", username)).await;
         return (ready_player_count, self.current_player_count);
     }
 
@@ -313,6 +329,7 @@ impl Lobby {
     async fn betting_round(&mut self, round: i32) {
 
         let mut players = self.players.lock().await;
+        let players_tx = players.iter().map(|p| p.tx.clone()).collect::<Vec<_>>();
         println!("Current round: {}", round);
         // ensure all players have current_bet set to 0
 
@@ -361,6 +378,7 @@ impl Lobby {
                                 player.state = CHECKED;
                                 println!("checked");
                                 // self.broadcast(format!("{} has checked.", player.name)).await;
+                                self.lobby_wide_send(players_tx.clone(), format!("{} has checked.", player.name)).await;
                                 players_remaining -= 1; // on valid moves, decrement the amount of players to make a move
                                 break;
                             } else {
@@ -388,7 +406,8 @@ impl Lobby {
                                     else {
                                         if bet == player.wallet {
                                             player.state = ALL_IN;
-                                            self.broadcast(format!("{} has gone all in!", player.name)).await;
+                                            // self.broadcast(format!("{} has gone all in!", player.name)).await;
+                                            self.lobby_wide_send(players_tx.clone(), format!("{} has gone all in!", player.name)).await;
                                         }
                                         else{
                                             player.state = RAISED;
@@ -398,7 +417,8 @@ impl Lobby {
                                         self.pot += bet;
                                         current_lobby_bet = player.current_bet;
 
-                                        self.broadcast(format!("{} has raised the pot to: {}", player.name, player.current_bet)).await;
+                                        // self.broadcast(format!("{} has raised the pot to: {}", player.name, player.current_bet)).await;
+                                        self.lobby_wide_send(players_tx.clone(), format!("{} has raised the pot to: {}", player.name, player.current_bet)).await;
                                         // reset the betting cycle so every player calls/raises the new max bet or folds
                                         players_remaining = self.current_player_count - 1;
                                         break;
@@ -418,14 +438,16 @@ impl Lobby {
                                 player.current_bet += call_amount;
                                 self.pot += call_amount;
                                 player.state = CALLED;
-                                self.broadcast(format!("{} has called the bet.", player.name)).await;
+                                // self.broadcast(format!("{} has called the bet.", player.name)).await;
+                                self.lobby_wide_send(players_tx.clone(), format!("{} has called the bet.", player.name)).await;
                                 players_remaining -= 1;
                                 break;
                             }
                         }
                         "4" => {
                             player.state = FOLDED;
-                            self.broadcast(format!("{} has folded.", player.name)).await;
+                            // self.broadcast(format!("{} has folded.", player.name)).await;
+                            self.lobby_wide_send(players_tx.clone(), format!("{} has folded.", player.name)).await;
                             players_remaining -= 1;
                             break;
                         }
@@ -440,13 +462,15 @@ impl Lobby {
                                     current_lobby_bet = player.current_bet;
                                 }
                                 player.state = ALL_IN;
-                                self.broadcast(format!("{} has gone all in!", player.name)).await;
+                                // self.broadcast(format!("{} has gone all in!", player.name)).await;
+                                self.lobby_wide_send(players_tx.clone(), format!("{} has gone all in!", player.name)).await;
                                 players_remaining -= 1;
                                 break;
                             }
                         },
                         "Disconnected" => {
-                            self.broadcast(format!("{} has disconnected and folded.", player.name)).await;
+                            // self.broadcast(format!("{} has disconnected and folded.", player.name)).await;
+                            self.lobby_wide_send(players_tx.clone(), format!("{} has disconnected and folded.", player.name)).await;
                             break;
                         }
                         _ => {
@@ -472,6 +496,7 @@ impl Lobby {
         //Once the cards are swap we will quickly display the cards to the player only.
         //Once all players have swapped their cards, we will move to the next betting round
         let mut players = self.players.lock().await;
+        let players_tx = players.iter().map(|p| p.tx.clone()).collect::<Vec<_>>();
         for player in players.iter_mut(){
             if player.state == FOLDED || player.state == ALL_IN {continue};
             println!("Drawing round for: {}", player.name);
@@ -531,7 +556,8 @@ impl Lobby {
         }
     }
                 else if input.starts_with("Disconnected") {
-                    self.broadcast(format!("{} has disconnected and folded.", player.name)).await;
+                    // self.broadcast(format!("{} has disconnected and folded.", player.name)).await;
+                    self.lobby_wide_send(players_tx.clone(), format!("{} has disconnected.", player.name)).await;
                     break;
                 }
                 else {
@@ -543,7 +569,9 @@ impl Lobby {
 
     async fn showdown(&self) {
         let players: Vec<Player> = self.players.lock().await.to_vec();
+        let players_tx = players.iter().map(|p| p.tx.clone()).collect::<Vec<_>>();
         let mut winning_players: Vec<Player> = Vec::new(); // keeps track of winning players at the end, accounting for draws
+        let mut winning_players_names: Vec<String> = Vec::new();
         let mut winning_hand = (0, 0, 0, 0, 0, 0); // keeps track of current highest hand, could change when incrementing between players
         for player in players {
             if player.state == FOLDED {
@@ -556,9 +584,12 @@ impl Lobby {
             {
                 winning_hand = player_hand_type;
                 winning_players.clear();
-                winning_players.push(player);
+                winning_players_names.clear();
+                winning_players.push(player.clone());
+                winning_players_names.push(player.name.clone());
             } else if player_hand_type.0 == winning_hand.0 && player_hand_type.1 == winning_hand.1 {
-                winning_players.push(player);
+                winning_players.push(player.clone());
+                winning_players_names.push(player.name.clone());
             }
         }
         let winning_player_count = winning_players.len();
@@ -567,6 +598,8 @@ impl Lobby {
             let mut player = player.clone();
             player.wallet += pot_share;
         }
+        let winner_names = winning_players_names.join(", ");
+        self.lobby_wide_send(players_tx, format!("Winner: {}", winner_names)).await;
     }
 
     async fn change_player_state(&self, state: i32) {
