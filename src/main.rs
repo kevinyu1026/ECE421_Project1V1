@@ -277,8 +277,8 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, server_lobby: Arc<M
                         let stats = db.player_stats(&username_id).await;
                         if let Ok(stats) = stats {
                             tx.send(Message::text(format!(
-                                "Player Stats for {}: Games Played: {}, Games Won: {}",
-                                username_id, stats.games_played, stats.games_won
+                                "Player Stats for {}: Games Played: {}, Games Won: {}, Wallet: {}",
+                                &username_id, stats.games_played, stats.games_won, stats.wallet,
                             )))
                             .unwrap();
                         } else {
@@ -364,15 +364,15 @@ async fn join_lobby(server_lobby: Arc<Mutex<Lobby>>, mut player: Player, db: Arc
                             // let stats = db.get_player_stats(&username_id).await.unwrap();
                             // tx.send(Message::text(format!("Stats: {:?}", stats))).unwrap();
                             let stats = db.player_stats(&player.name).await;
-                            if let Ok(stats) = stats {
-                                tx.send(Message::text(format!(
-                                    "Player Stats for {}: Games Played: {}, Games Won: {}",
-                                    &player.name, stats.games_played, stats.games_won
-                                )))
-                                .unwrap();
-                            } else {
-                                tx.send(Message::text("Failed to retrieve stats.")).unwrap();
-                            }
+                        if let Ok(stats) = stats {
+                            tx.send(Message::text(format!(
+                                "Player Stats for {}: Games Played: {}, Games Won: {}, Wallet: {}",
+                                &player.name, stats.games_played, stats.games_won, stats.wallet,
+                            )))
+                            .unwrap();
+                        } else {
+                            tx.send(Message::text("Failed to retrieve stats.")).unwrap();
+                        }
                         }
                         "q" => {
                             // QUIT LOBBY------------------------

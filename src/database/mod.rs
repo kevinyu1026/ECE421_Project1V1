@@ -8,6 +8,7 @@ use std::sync::Arc;
 pub struct PlayerStats {
     pub games_played: i32,
     pub games_won: i32,
+    pub wallet: i32,
 }
 
 // #[derive(Debug)]
@@ -54,7 +55,7 @@ impl Database {
 
     pub async fn player_stats(&self, username: &str) -> Result<PlayerStats, sqlx::Error> {
         let row = sqlx::query(
-            "SELECT games_played, games_won FROM players WHERE name = ?1",
+            "SELECT games_played, games_won, wallet FROM players WHERE name = ?1",
         )
         .bind(username)
         .fetch_one(&*self.pool)
@@ -63,6 +64,7 @@ impl Database {
         Ok(PlayerStats {
             games_played: row.get(0),
             games_won: row.get(1),
+            wallet: row.get(2),
         })
     }
 
