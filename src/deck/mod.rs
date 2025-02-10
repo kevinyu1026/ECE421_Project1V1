@@ -1,5 +1,6 @@
 //! A module for creating and managing a deck of cards
-
+//! 
+//! This module contains the `Deck` struct, which represents a deck of 52 playing cards. The deck can be shuffled, and cards can be dealt from the top of the deck.
 use rand::seq::SliceRandom;
 use rand::prelude::*;
 use rand::rng;

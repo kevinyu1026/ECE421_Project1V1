@@ -1,6 +1,51 @@
 //! # Poker Server
+//! 
+//! This module contains the main function for the Poker server.
+//! 
+//! The server is implemented using the `warp` web framework and provides a WebSocket
+//! interface for clients to connect to. The server manages player registration, login,
+//! and lobby creation, as well as game logic for playing Poker.
+//! 
+//! The server uses a SQLite database to store player information and statistics.
+//! 
+//! The server supports the following features:
+//! - Player registration and login
+//! - Lobby creation and joining
+//! - Game setup and management
+//! - Player statistics tracking
+//! 
+//! The server is designed to handle multiple concurrent clients and games, with each
+//! client connecting via a WebSocket connection.
+//! 
+//! The server is implemented using asynchronous Rust with the `tokio` runtime.
+//! 
+//! # Usage
+//! 
+//! To start the server, run the following command:
+//! 
+//! ```bash
+//! cargo run
+//! ```
+//! 
+//! The server will start on `localhost:1112` and listen for incoming WebSocket connections.
+//! 
+//! Clients can connect to the server using a WebSocket client, such as `websocat` or a web browser.
+//! 
+//! # Dependencies
+//! 
+//! The server uses the following dependencies:
+//! - `warp` for the web framework and WebSocket handling
+//! - `sqlx` for the SQLite database interaction
+//! - `uuid` for generating unique player IDs
+//! - `tokio` for the asynchronous runtime
+//! 
+//! # Modules
+//! 
+//! The server is organized into the following modules:
+//! - `database` - Database module for player registration, login, and statistics
+//! - `deck` - Deck module for managing the deck of cards
+//! - `lobby` - Lobby module for managing players and lobbies
 mod database;
-mod game;
 mod deck;
 mod lobby;
 
@@ -52,7 +97,17 @@ fn with_lobby(
     warp::any().map(move || lobby.clone())
 }
 
+    /// Retrieves the names and statuses of all lobbies from the server.
+    /// 
+    /// This function locks the `server_lobby` asynchronously, then calls 
+    /// `get_lobby_names_and_status` to obtain a list of lobby names and their 
+    /// corresponding statuses.
+    /// 
+    /// # Returns
+    /// 
+    /// A list of tuples where each tuple contains the name of a lobby and its status.
 async fn get_lobby_names(server_lobby: Arc<Mutex<Lobby>>) -> String {
+
     let lobbies = server_lobby.lock().await.get_lobby_names_and_status().await;
     let mut lobby_list = String::from("");
     if lobbies.is_empty() {
@@ -69,6 +124,21 @@ async fn get_lobby_names(server_lobby: Arc<Mutex<Lobby>>) -> String {
     lobby_list
 }
 
+/// Handles a new WebSocket connection.
+/// 
+/// This function is called for each new WebSocket connection and is responsible for
+/// processing the player's input and sending messages back to the client.
+/// 
+/// # Arguments
+/// 
+/// * `ws` - The WebSocket connection.
+/// * `db` - The database connection pool.
+/// * `server_lobby` - The server lobby containing all players and lobbies.
+/// 
+/// # Returns
+/// 
+/// This function does not return a value, but it sends messages to the client
+/// via the WebSocket connection.
 async fn handle_connection(ws: WebSocket, db: Arc<Database>, server_lobby: Arc<Mutex<Lobby>>) {
     let (mut ws_tx, mut ws_rx) = ws.split();
     let (tx, mut rx) = mpsc::unbounded_channel();
@@ -312,6 +382,20 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, server_lobby: Arc<M
     println!("{} has left the server.", username_id.clone());
 }
 
+/// Handles a player joining a lobby.
+/// 
+/// This function is called when a player joins a lobby and is responsible for processing
+/// the player's input and sending messages back to the client.
+/// 
+/// # Arguments
+/// 
+/// * `server_lobby` - The server lobby containing all players and lobbies.
+/// * `player` - The player joining the lobby.
+/// * `db` - The database connection pool.
+/// 
+/// # Returns
+/// 
+/// This function returns a `String` indicating the exit status of the player.
 async fn join_lobby(server_lobby: Arc<Mutex<Lobby>>, mut player: Player, db: Arc<Database>) -> String {
     player.state = lobby::IN_LOBBY;
     let player_lobby = player.lobby.clone();

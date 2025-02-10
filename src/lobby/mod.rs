@@ -1,4 +1,12 @@
 //! This module contains the definitions for the Lobby and Player structs, as well as the implementation of the game state machine.
+//! 
+//! The Lobby struct represents a game lobby, which can contain multiple players. It manages the game state and player interactions.
+//! 
+//! The Player struct represents a player in the game. It contains the player's name, hand, wallet balance, and other attributes.
+//! 
+//! The game state machine is implemented as a series of async functions that handle the game logic, such as dealing cards, betting rounds, and showdowns.
+//! 
+//! The game state machine is driven by player input, which is received via WebSocket messages. The game state machine processes the input and sends messages back to the players. 
 use super::*;
 use crate::Deck;
 use futures_util::future::{ready, Join};
