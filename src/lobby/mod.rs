@@ -12,7 +12,7 @@ use warp::{filters::ws::WebSocket, ws::Message};
 pub const MAX_PLAYER_COUNT: i32 = 5;
 const EMPTY: i32 = -1;
 pub const JOINABLE: i32 = 0;
-const START_OF_ROUND: i32 = 1;
+pub const START_OF_ROUND: i32 = 1;
 const ANTE: i32 = 2;
 const DEAL_CARDS: i32 = 3;
 const FIRST_BETTING_ROUND: i32 = 4;
@@ -119,16 +119,27 @@ impl Player {
         lobby_name: String,
     ) -> i32 {
         let lobbies = server_lobby.lock().await.lobbies.lock().await.clone();
+        let lobby_names_and_status = server_lobby.lock().await.lobby_names_and_status.lock().await.clone();
         println!("Lobby name entered: {}", lobby_name);
-        for lobby in lobbies {
-            let mut lobby_guard = lobby.lock().await;
-            if lobby_guard.name == lobby_name {
-                if lobby_guard.game_state == JOINABLE {
-                    lobby_guard.add_player(self.clone()).await;
-                    self.lobby = lobby.clone();
-                    return SUCCESS;
+        let mut found = false;
+        for (name, status) in lobby_names_and_status {
+            if name == lobby_name && status == JOINABLE {
+                found = true;
+                break;
+            }
+        }
+        if found{
+            for lobby in lobbies {
+                let lobby_guard = lobby.try_lock();
+                if let Ok(mut lobby_guard) = lobby_guard {
+                    if lobby_guard.name == lobby_name {
+                        println!("reached2");
+                        lobby_guard.add_player(self.clone()).await;
+                        self.lobby = lobby.clone();
+                        return SUCCESS;
+                    }
                 } else {
-                    return SERVER_FULL;
+                    continue;
                 }
             }
         }
@@ -142,11 +153,7 @@ pub struct Lobby {
     // Use Arc<Mutex<...>> so the Lobby struct can #[derive(Clone)]
     pub players: Arc<Mutex<Vec<Player>>>,
     pub lobbies: Arc<Mutex<Vec<Arc<Mutex<Lobby>>>>>,
-
-    // use lobby_names_and_status: Arc<Mutex<Vec<(String,i32)>>> to store lobby names and their status
-
-
-
+    pub lobby_names_and_status: Arc<Mutex<Vec<(String, i32)>>>, // store lobby names and their statuses
     pub game_db: SqlitePool,
     deck: Deck,
     pub pot: i32,
@@ -162,6 +169,7 @@ impl Lobby {
             name: lobby_name,
             players: Arc::new(Mutex::new(Vec::new())),
             lobbies: Arc::new(Mutex::new(Vec::new())),
+            lobby_names_and_status: Arc::new(Mutex::new(Vec::new())),
             deck: Deck::new(),
             current_player_count: 0,
             max_player_count: player_count.unwrap_or(MAX_PLAYER_COUNT),
@@ -224,16 +232,22 @@ impl Lobby {
 
     pub async fn add_lobby(&self, lobby: Arc<Mutex<Lobby>>) {
         let mut lobbies = self.lobbies.lock().await;
-        lobbies.push(lobby);
+        lobbies.push(lobby.clone());
         // push lobby name onto the tuple vec
+        let lobby_name = lobby.lock().await.name.clone();
+        let lobby_status = lobby.lock().await.game_state.clone();
+        self.lobby_names_and_status.lock().await.push((lobby_name, lobby_status));
     }
 
     pub async fn remove_lobby(&self, lobby_name: String) {
         let mut lobbies = self.lobbies.lock().await;
         let mut i = 0;
         while i < lobbies.len() {
-            if lobbies[i].lock().await.name == lobby_name {
+            let curr_lobby_name = lobbies[i].lock().await.name.clone();
+            if lobby_name == curr_lobby_name {
                 lobbies.remove(i);
+                // push lobby name onto the tuple vec
+                self.lobby_names_and_status.lock().await.remove(i);
             } else {
                 i += 1;
             }
@@ -241,22 +255,13 @@ impl Lobby {
     }
 
     pub async fn get_lobby_names_and_status(&self) -> Vec<(String, i32)> {
-        let lobbies = self.lobbies.lock().await;
-        let mut names_and_status = Vec::new();
-        for lobby in lobbies.iter() {
-            let lobby_guard = match lobby.try_lock() {
-                Ok(guard) => guard,
-                Err(_) => continue,
-            };
-            names_and_status.push((lobby_guard.name.clone(), lobby_guard.game_state));
-        }
-        names_and_status
+        self.lobby_names_and_status.lock().await.clone()
     }
 
     pub async fn lobby_exists(&self, lobby_name: String) -> bool {
-        let lobbies = self.lobbies.lock().await;
-        for lobby in lobbies.iter() {
-            if lobby.lock().await.name == lobby_name {
+        let lobby_names_and_status = self.lobby_names_and_status.lock().await;
+        for (name, _) in lobby_names_and_status.iter() {
+            if name == &lobby_name {
                 return true;
             }
         }
@@ -272,13 +277,6 @@ impl Lobby {
             .join("\n");
         message
     }
-
-    // pub async fn broadcast(&self, message: String) {
-    //     let players = self.players.lock().await;
-    //     for player in players.iter() {
-    //         let _ = player.tx.send(Message::text(message.clone()));
-    //     }
-    // }
 
     pub async fn broadcast(&self, message: String) {
         println!("Broadcasting: {}", message);

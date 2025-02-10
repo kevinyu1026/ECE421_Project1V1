@@ -317,10 +317,7 @@ async fn join_lobby(server_lobby: Arc<Mutex<Lobby>>, mut player: Player, db: Arc
     let player_lobby = player.lobby.clone();
     let tx = player.tx.clone();
     println!("{} has joined lobby: {}", player.name, player_lobby.lock().await.name);
-    let player_lobby_name = player_lobby.lock().await.name.clone();
-    let player_lobby_player_count = player_lobby.lock().await.current_player_count;
-    println!("lobby {} has {} players", player_lobby_name, player_lobby_player_count);
-
+    
     tx.send(Message::text(format!(
         "Welcome to lobby: {}\nChoose an option:\n1. Ready:           r\n2. Show Players:    p\n3. View stats:      s\n4. Quit:            q\n\n",
         player_lobby.lock().await.name
@@ -402,6 +399,7 @@ async fn join_lobby(server_lobby: Arc<Mutex<Lobby>>, mut player: Player, db: Arc
                                 player_lobby.lock().await.broadcast("All players ready. Starting game...".to_string()).await;
                                 sleep(Duration::from_secs(2)).await;
                                 let player_lobby_clone = player_lobby.clone();
+                                player_lobby.lock().await.game_state = lobby::START_OF_ROUND;
                                 tokio::spawn(async move {
                                     let mut player_lobby_host = player_lobby_clone.lock().await;
                                     // server lobby change status of game lobby in lobby_names_and_status
