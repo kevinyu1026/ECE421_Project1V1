@@ -78,5 +78,44 @@ impl Deck {
 //         println!("{:?}", new_deck.deal());
 //     }
 // }
+#[cfg(test)]
+mod tests {
+    use super::*;
 
+    #[test]
+    fn test_deck_creation() {
+        let deck = Deck::new();
+        assert_eq!(deck.cards.len(), 52);
+        assert_eq!(deck.next_card_index, 0);
+    }
+
+    #[test]
+    fn test_shuffle() {
+        let mut deck = Deck::new();
+        let original_deck = deck.cards.clone();
+        deck.shuffle();
+        assert_ne!(deck.cards, original_deck);
+        assert_eq!(deck.cards.len(), 52);
+        assert_eq!(deck.next_card_index, 0);
+    }
+
+    #[test]
+    fn test_deal() {
+        let mut deck = Deck::new();
+        let first_card = deck.cards[0];
+        let dealt_card = deck.deal();
+        assert_eq!(first_card, dealt_card);
+        assert_eq!(deck.next_card_index, 1);
+    }
+
+    #[test]
+    fn test_deal_all_cards() {
+        let mut deck = Deck::new();
+        for i in 0..52 {
+            let card = deck.deal();
+            assert_eq!(card, i);
+        }
+        assert_eq!(deck.next_card_index, 52);
+    }
+}
 

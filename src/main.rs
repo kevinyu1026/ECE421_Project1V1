@@ -249,6 +249,7 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, server_lobby: Arc<M
                             lobby::SUCCESS => {
                                 server_lobby.lock().await.broadcast(format!("{} has joined lobby: {}", username_id.clone(), lobby_name)).await;
                                 let exit_status = join_lobby(server_lobby.clone(), current_player.clone(), db.clone()).await;
+                                println!("REACHED HERE: {}", exit_status);
                                 current_player.state = lobby::IN_SERVER;
                                 if exit_status == "Disconnect" {
                                     break;
@@ -258,7 +259,7 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, server_lobby: Arc<M
                                 tx.send(Message::text("Lobby already full.")).unwrap();
                             }
                             _ => {
-                                tx.send(Message::text("reached.")).unwrap();
+                                println!("Invalid join status.");
                             }
                         }
                     }
@@ -305,10 +306,7 @@ async fn handle_connection(ws: WebSocket, db: Arc<Database>, server_lobby: Arc<M
             }
         }
     }
-
-    println!("Disconnect message ----------- Server");
     server_lobby.lock().await.remove_player(current_player.name.clone()).await;
-    current_player.remove_player(server_lobby.clone(), db).await;
     println!("{} has left the server.", username_id.clone());
 }
 
@@ -336,17 +334,20 @@ async fn join_lobby(server_lobby: Arc<Mutex<Lobby>>, mut player: Player, db: Arc
         if lobby_state == lobby::JOINABLE || lobby_state == lobby::GAME_LOBBY_FULL {
             match result.as_str() {
                 "Disconnect" => {
-                    println!("{} has disconnected ------ here.", player.name);
                     let lobby_status = player_lobby.lock().await.remove_player(player.name.clone()).await;
                     println!("lobby status: {}", lobby_status);
                     if lobby_status == lobby::GAME_LOBBY_EMPTY {
-                        server_lobby.lock().await.remove_lobby(player_lobby.lock().await.name.clone()).await;
+                        server_lobby.lock().await.remove_lobby(lobby_name.clone()).await;
                     }
                     server_lobby.lock().await.remove_player(player.name.clone()).await;
-                    player.remove_player(server_lobby.clone(), db.clone()).await;
+                    // player.remove_player(server_lobby.clone(), db.clone()).await;
                     if player_lobby.lock().await.game_state == lobby::JOINABLE {
                         player_lobby.lock().await.ready_up("".to_string()).await;
                     }
+                    if let Err(e) = db.update_player_stats(&player).await {
+                        eprintln!("Failed to update player stats: {}", e);
+                    }
+                    drop(player.rx);
                     return "Disconnect".to_string();
                 }
                 "Error" => {
@@ -377,12 +378,11 @@ async fn join_lobby(server_lobby: Arc<Mutex<Lobby>>, mut player: Player, db: Arc
                         "q" => {
                             // QUIT LOBBY------------------------
                             let lobby_status = player_lobby.lock().await.remove_player(player.name.clone()).await;
-                            println!("lobby status: {}", lobby_status);
                             if lobby_status == lobby::GAME_LOBBY_EMPTY {
                                 server_lobby.lock().await.remove_lobby(player_lobby.lock().await.name.clone()).await;
                             }
                             // update player stat to DB
-                            break;
+                            return "Normal".to_string();
                         }
                         "r" => {
                             // READY UP------------------------
@@ -398,6 +398,7 @@ async fn join_lobby(server_lobby: Arc<Mutex<Lobby>>, mut player: Player, db: Arc
                                 player_lobby.lock().await.broadcast("Need at least 2 players to start game.".to_string()).await;
                             } else if lobby_player_count >= 2 && all_ready == 1 {
                                 player_lobby.lock().await.broadcast("All players ready. Starting game...".to_string()).await;
+                                sleep(Duration::from_secs(2)).await;
                                 let player_lobby_clone = player_lobby.clone();
                                 tokio::spawn(async move {
                                     let mut player_lobby_host = player_lobby_clone.lock().await;
@@ -413,9 +414,7 @@ async fn join_lobby(server_lobby: Arc<Mutex<Lobby>>, mut player: Player, db: Arc
             }
         } else {
             println!("Lobby in progress.");
-
         }
     }
-    return "Normal".to_string();
 }
 
