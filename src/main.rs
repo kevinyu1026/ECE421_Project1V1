@@ -379,7 +379,7 @@ async fn join_lobby(server_lobby: Arc<Mutex<Lobby>>, mut player: Player, db: Arc
                             // QUIT LOBBY------------------------
                             let lobby_status = player_lobby.lock().await.remove_player(player.name.clone()).await;
                             if lobby_status == lobby::GAME_LOBBY_EMPTY {
-                                server_lobby.lock().await.remove_lobby(player_lobby.lock().await.name.clone()).await;
+                                server_lobby.lock().await.remove_lobby(lobby_name.clone()).await;
                             }
                             // update player stat to DB
                             return "Normal".to_string();
@@ -402,6 +402,7 @@ async fn join_lobby(server_lobby: Arc<Mutex<Lobby>>, mut player: Player, db: Arc
                                 let player_lobby_clone = player_lobby.clone();
                                 tokio::spawn(async move {
                                     let mut player_lobby_host = player_lobby_clone.lock().await;
+                                    // server lobby change status of game lobby in lobby_names_and_status
                                     player_lobby_host.start_game().await;
                                 });
                             }

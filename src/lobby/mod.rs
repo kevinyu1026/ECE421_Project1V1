@@ -142,6 +142,11 @@ pub struct Lobby {
     // Use Arc<Mutex<...>> so the Lobby struct can #[derive(Clone)]
     pub players: Arc<Mutex<Vec<Player>>>,
     pub lobbies: Arc<Mutex<Vec<Arc<Mutex<Lobby>>>>>,
+
+    // use lobby_names_and_status: Arc<Mutex<Vec<(String,i32)>>> to store lobby names and their status
+
+
+
     pub game_db: SqlitePool,
     deck: Deck,
     pub pot: i32,
@@ -220,6 +225,7 @@ impl Lobby {
     pub async fn add_lobby(&self, lobby: Arc<Mutex<Lobby>>) {
         let mut lobbies = self.lobbies.lock().await;
         lobbies.push(lobby);
+        // push lobby name onto the tuple vec
     }
 
     pub async fn remove_lobby(&self, lobby_name: String) {
@@ -238,7 +244,10 @@ impl Lobby {
         let lobbies = self.lobbies.lock().await;
         let mut names_and_status = Vec::new();
         for lobby in lobbies.iter() {
-            let lobby_guard = lobby.lock().await;
+            let lobby_guard = match lobby.try_lock() {
+                Ok(guard) => guard,
+                Err(_) => continue,
+            };
             names_and_status.push((lobby_guard.name.clone(), lobby_guard.game_state));
         }
         names_and_status
@@ -543,6 +552,9 @@ impl Lobby {
                     "Disconnect" => {
                         // self.broadcast(format!("{} has disconnected and folded.", player.name)).await;
                         self.lobby_wide_send(players_tx.clone(),format!("{} has disconnected and folded.", player.name)).await;
+                        player.state = FOLDED;
+                        // Handle disconnection properly
+                        drop(player.clone().rx);
                         break;
                     }
                     _ => {
