@@ -61,21 +61,6 @@ pub struct Player {
 }
 
 impl Player {
-    pub async fn remove_player(&self, server_lobby: Arc<Mutex<Lobby>>, db: Arc<Database>) {
-        db.update_player_stats(&self).await.unwrap();
-
-        server_lobby
-            .lock()
-            .await
-            .remove_player(self.name.clone())
-            .await;
-        server_lobby
-            .lock()
-            .await
-            .broadcast(format!("{} has left the server.", self.name))
-            .await;
-    }
-
     pub async fn get_player_input(&mut self) -> String {
         let mut return_string: String = "".to_string();
         let mut rx = self.rx.lock().await;
@@ -108,7 +93,6 @@ impl Player {
                                 self.state = IN_LOBBY;
                             }
                         }
-                        println!("Disconnect-------------");
                         return "Disconnect".to_string(); // pass flag back
                     } else {
                         // handles client response here----------------
@@ -121,9 +105,8 @@ impl Player {
                     }
                 }
                 Err(e) => {
-                    eprintln!("Error: {}", e);
-                    return_string = "Error".to_string();
-                    return return_string;
+                    eprintln!("Error input: {}", e);
+                    return "Disconnect".to_string();
                 }
             }
         }
@@ -222,6 +205,8 @@ impl Lobby {
     pub async fn remove_player(&mut self, username: String) -> i32 {
         let mut players = self.players.lock().await;
         players.retain(|p| p.name != username);
+        let players_tx = players.iter().map(|p| p.tx.clone()).collect::<Vec<_>>();
+        self.lobby_wide_send(players_tx, format!("{} has disconnected from {}.", username, self.name)).await;
         println!("Player removed from {}: {}", self.name, username);
         self.current_player_count -= 1;
         if self.current_player_count == 0 {
@@ -363,6 +348,10 @@ impl Lobby {
 
     async fn betting_round(&mut self, round: i32) {
         let mut players = self.players.lock().await;
+        if players.len() == 1 {
+            // only one player left, move on
+            return;
+        }
         let players_tx = players.iter().map(|p| p.tx.clone()).collect::<Vec<_>>();
         println!("Current round: {}", round);
         // ensure all players have current_bet set to 0
@@ -408,7 +397,7 @@ impl Lobby {
             let _ = player.tx.send(Message::text(message));
             loop {
                 let choice = player.get_player_input().await;
-                println!("player input: {}", choice.clone());
+                // println!("player input: {}", choice.clone());
 
                 match choice.as_str() {
                     "1" => {
@@ -551,7 +540,7 @@ impl Lobby {
                         }
                         check_flag = false;
                     }
-                    "Disconnected" => {
+                    "Disconnect" => {
                         // self.broadcast(format!("{} has disconnected and folded.", player.name)).await;
                         self.lobby_wide_send(players_tx.clone(),format!("{} has disconnected and folded.", player.name)).await;
                         break;
@@ -582,6 +571,10 @@ impl Lobby {
         //Once the cards are swap we will quickly display the cards to the player only.
         //Once all players have swapped their cards, we will move to the next betting round
         let mut players = self.players.lock().await;
+        if players.len() == 1 {
+            // only one player left, move on
+            return;
+        }
 
         let players_tx = players
             .iter()
@@ -607,6 +600,7 @@ impl Lobby {
                 let _ = player.tx.send(Message::text(message));
     
                 let input = player.get_player_input().await;
+                println!("Player input for drawing round: {}", input);
     
                 match input.as_str() {
                     "1" => {
@@ -667,7 +661,7 @@ impl Lobby {
                         }
                         break;
                     }
-                    "Disconnected" => {
+                    "Disconnect" => {
                         self.lobby_wide_send(players_tx.clone(), format!("{} has disconnected.", player.name)).await;
                         break;
                     }
