@@ -595,8 +595,21 @@ impl Lobby {
             .collect::<Vec<_>>(); // get all hands
 
         self.display_hand(players_tx.clone(), players_hands.clone()).await;
-        for player in players.iter_mut(){
-            if player.state == FOLDED || player.state == ALL_IN {continue};
+        let mut current_player_index = self.first_betting_player;
+        let mut count = 0;
+        let mut player_count = 0;
+        for player in players.iter_mut() {
+            if player.state != FOLDED {
+                player_count += 1;
+            }
+        }
+        loop {
+            let player = &mut players[current_player_index as usize];
+            if player.state == FOLDED {
+                current_player_index = (current_player_index + 1) % self.current_player_count;
+                continue
+            };
+            if count == player_count {break};
             println!("Drawing round for: {}", player.name);
 
             player.tx.send(Message::text("Drawing round!")).ok();
@@ -677,6 +690,8 @@ impl Lobby {
                     }
                 }
             }
+            current_player_index = (current_player_index + 1) % self.current_player_count;
+            count += 1;
         }
     }
 
@@ -767,13 +782,18 @@ impl Lobby {
         // let players = self.players;
         let mut message: String;
         let mut index = 0;
+        let mut count = 1;
         for tx in players_tx.iter().cloned() {
             let mut translated_cards: String = Default::default();
             for card in players_hands[index].iter().cloned() {
+                // create a string like "count. "
+                translated_cards.push_str(&format!("{}. ", count));
                 translated_cards.push_str(&self.translate_card(card.clone()).await);
-                translated_cards.push_str(", ");
+                translated_cards.push_str("\n");
+                count += 1;
             }
-            message = format!("Your hand: {}", translated_cards.trim_end_matches(", "));
+            count = 1;
+            message = format!("Your hand:\n{}", translated_cards.trim_end_matches(", "));
             let _ = tx.send(Message::text(message.clone()));
             index += 1;
         }
@@ -872,6 +892,7 @@ impl Lobby {
                 }
                 UPDATE_DB => {
                     self.pot = 0;
+                    
                     self.update_db().await;
                     break;
                }
