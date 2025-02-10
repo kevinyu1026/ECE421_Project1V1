@@ -737,6 +737,7 @@ impl Lobby {
         for player in players.iter_mut() {
             println!("Changing {} state to: {}", player.name, state);
             player.state = state;
+            player.hand.clear();
         }
     }
 
@@ -831,6 +832,7 @@ impl Lobby {
         loop {
             match self.game_state {
                 START_OF_ROUND => {
+                    self.first_betting_player = (self.first_betting_player + 1) % self.current_player_count;
                     self.game_state = ANTE;
                 }
                 ANTE => {
