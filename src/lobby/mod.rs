@@ -827,10 +827,6 @@ impl Lobby {
         }
     }
 
-    // async fn get_tx_vec(&self) {
-
-    // }
-
     pub async fn start_game(&mut self) {
         // change lobby state first so nobody can try to join anymore
         println!("Game started!");
