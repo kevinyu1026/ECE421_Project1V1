@@ -1,3 +1,5 @@
+//! A module for creating and managing a deck of cards
+
 use rand::seq::SliceRandom;
 use rand::prelude::*;
 use rand::rng;
@@ -18,7 +20,7 @@ pub struct Deck {
 }
 
 impl Deck {
-    // Create a new 52-card deck
+    /// Create a new 52-card deck
     pub fn new() -> Deck{
         Deck{next_card_index: 0, cards: (0..52).collect()}        
     }
@@ -28,7 +30,7 @@ impl Deck {
     //         "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A",
     //     ];
 
-    // Shuffle the deck
+    /// Shuffle the deck
     pub fn shuffle(&mut self){
         self.cards.shuffle(&mut rng());
         self.next_card_index = 0;
@@ -38,10 +40,10 @@ impl Deck {
     //     self.cards.shuffle(&mut rng());
     // }
 
-    // Deal one card from the top of the deck
-    // pub fn deal_one_card(&mut self) -> Option<Card> {
-    //     self.cards.pop()
-    // }
+    /// Deal one card from the top of the deck
+    /// pub fn deal_one_card(&mut self) -> Option<Card> {
+    ///     self.cards.pop()
+    /// }
     pub fn deal(&mut self) -> i32{
         let card = self.cards[self.next_card_index as usize];
         self.next_card_index += 1;

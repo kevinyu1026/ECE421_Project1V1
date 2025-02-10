@@ -1,4 +1,4 @@
-//!
+//! This module contains the definitions for the Lobby and Player structs, as well as the implementation of the game state machine.
 use super::*;
 use crate::Deck;
 use futures_util::future::{ready, Join};
