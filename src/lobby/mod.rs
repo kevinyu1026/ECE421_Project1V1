@@ -545,6 +545,7 @@ impl Lobby {
                     "Disconnect" => {
                         // self.broadcast(format!("{} has disconnected and folded.", player.name)).await;
                         self.lobby_wide_send(players_tx.clone(),format!("{} has disconnected and folded.", player.name)).await;
+                        player.state = FOLDED;
                         break;
                     }
                     _ => {
@@ -864,6 +865,7 @@ impl Lobby {
                     self.game_state = UPDATE_DB;
                 }
                 UPDATE_DB => {
+                    self.pot = 0;
                     self.update_db().await;
                     break;
                }
