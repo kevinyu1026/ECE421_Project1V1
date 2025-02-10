@@ -364,33 +364,25 @@ impl Lobby {
         let mut all_folded = false;
 
         if round == ANTE {
-            let mut total_contributors = 0;
             for player in players.iter_mut() {
                 if player.wallet > 10 {
                     println!("Player {} antes 10.", player.name);
                     self.pot += 10;
                     player.wallet -= 10;
-                    player.current_bet += 10;
-                    total_contributors += 1;
                 } else {
                     player.state = FOLDED;
                 }
             }
-            println!(
-                "Total ante contributions: {}, Expected: {}",
-                total_contributors * 10,
-                self.current_player_count * 10
-            );
             return;
         }
         if round == FIRST_BETTING_ROUND {
-            current_lobby_bet = 10; // first betting round starts with the ante
+            // current_lobby_bet = 0; // first betting round starts with the ante
             check_flag = true; // players can check if its first betting round with ante
-        } else {
-            for player in players.iter_mut() {
-                player.current_bet = 0;
-            }
         }
+        for player in players.iter_mut() {
+            player.current_bet = 0; // reset all players to 0
+        }
+
         while players_remaining > 0 {
             let player = &mut players[current_player_index as usize];
             if player.state == FOLDED || player.state == ALL_IN {
@@ -398,18 +390,6 @@ impl Lobby {
                 players_remaining -= 1;
                 continue;
             }
-            // if round == ANTE {
-            //     if player.wallet > 10 {
-            //         println!("Reached");
-            //         self.pot += 10;
-            //         player.wallet -= 10;
-            //         player.current_bet += 10;
-            //         players_remaining -= 1;
-            //     }
-            //     else {
-            //         player.state = FOLDED; // they couldnt afford ANTE, gettt emmm outttt
-            //     }
-            // } else {
             let message = format!(
                     "Choose an option:\n1. Check\n2. Raise\n3. Call\n4. Fold\n5. All-in\n\nYour amount to call: {}\nCurrent Pot: {}",
                     (current_lobby_bet - player.current_bet), self.pot
@@ -494,13 +474,13 @@ impl Lobby {
                         break;
                     }
                     "3" => {
+                        if current_lobby_bet == 0 {
+                            player.tx.send(Message::text("Invalid move: no bet to call.")).ok();
+                        }
+                        
                         let call_amount = current_lobby_bet - player.current_bet;
                         print!("call amount: {}", call_amount);
                         println!("current lobby bet: {}", current_lobby_bet);
-                        if current_lobby_bet == 0 || (self.game_state == FIRST_BETTING_ROUND && current_lobby_bet == 10)
-                        {
-                            player.tx.send(Message::text("Invalid move: no bet to call.")).ok();
-                        }
                         // else if self.game_state == FIRST_BETTING_ROUND && current_lobby_bet == 10 {
                         //     player.state = CHECKED;
                         //     // self.broadcast(format!("{} has checked.", player.name)).await;
@@ -508,7 +488,7 @@ impl Lobby {
                         //     players_remaining -= 1;
                         //     break;
                         // }
-                        else if call_amount > player.wallet {
+                        if call_amount > player.wallet {
                             player.tx.send(Message::text("Invalid move: not enough cash.\nAll in or fold!",)).ok();
                         } else {
                             player.wallet -= call_amount;
@@ -572,6 +552,7 @@ impl Lobby {
             }
 
             if all_folded == true {
+                self.game_state = SHOWDOWN;
                 break;
             }
             // Move to next player
@@ -781,14 +762,33 @@ impl Lobby {
         }
     }
 
-    //
-    // async fn update_db(&self) {
-    //     // update the database with the new player stats
-    //     let players = self.players.lock().await;
-    //     for player in players.iter() {
-    //         self.game_db.update_player_stats(&player).await.unwrap();
-    //     }
-    // }
+    
+    async fn update_db(&self) {
+        // update the database with the new player stats
+        let players = self.players.lock().await;
+        for player in players.iter() {
+            // let query = "UPDATE players SET games_played = ?, games_won = ?, wallet = ? WHERE name = ?";
+            // sqlx::query(query)
+            //     .bind(player.games_played)
+            //     .bind(player.games_won)
+            //     .bind(player.wallet)
+            //     .bind(&player.name)
+            //     .execute(&self.game_db)
+            //     .await
+            //     .unwrap();
+            sqlx::query(
+                "UPDATE players SET games_played = games_played + ?1, games_won = games_won + ?2, wallet = ?3 WHERE name = ?4",
+            )
+            .bind(player.games_played)
+            .bind(player.games_won)
+            .bind(player.wallet)
+            .bind(&player.name)
+            .execute(&self.game_db)
+            .await
+            .unwrap();
+            // self.game_db.update_player_stats(&player).await.unwrap();
+        }
+    }
 
     // async fn get_tx_vec(&self) {
 
@@ -830,8 +830,12 @@ impl Lobby {
                 FIRST_BETTING_ROUND => {
                     self.broadcast("------First betting round!------".to_string()).await;
                     self.betting_round(FIRST_BETTING_ROUND).await;
-                    self.game_state = DRAW;
-                    self.broadcast(format!("First betting round complete!\nCurrent pot: {}", self.pot)).await;
+                    if self.game_state == SHOWDOWN {
+                        continue;
+                    }else {
+                        self.game_state = DRAW;
+                        self.broadcast(format!("First betting round complete!\nCurrent pot: {}", self.pot)).await;
+                    }
                 }
                 DRAW => {
                     self.broadcast("------Drawing round!------".to_string()).await;
@@ -854,6 +858,7 @@ impl Lobby {
                     self.game_state = UPDATE_DB;
                 }
                 UPDATE_DB => {
+                    self.update_db().await;
                     break;
                }
                 _ => {
