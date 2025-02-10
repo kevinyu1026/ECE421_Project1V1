@@ -1,3 +1,4 @@
+//! # Poker Server
 mod database;
 mod game;
 mod deck;
@@ -16,6 +17,7 @@ use tokio::time::{sleep, Duration};
 use lobby::*;
 use deck::Deck;
 
+/// The maximum number of players allowed in the server.
 const MAX_SERVER_PLAYER_COUNT: i32 = 100;
 
 #[tokio::main]

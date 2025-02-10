@@ -1,4 +1,4 @@
-//!
+//! This module contains the definitions for the Lobby and Player structs, as well as the implementation of the game state machine.
 use super::*;
 use crate::Deck;
 use futures_util::future::{ready, Join};
@@ -381,6 +381,7 @@ impl Lobby {
                 } else {
                     player.state = FOLDED;
                 }
+                player.games_played += 1;
             }
             return;
         }
@@ -485,6 +486,7 @@ impl Lobby {
                     "3" => {
                         if current_lobby_bet == 0 {
                             player.tx.send(Message::text("Invalid move: no bet to call.")).ok();
+                            continue;
                         }
                         
                         let call_amount = current_lobby_bet - player.current_bet;
@@ -686,12 +688,14 @@ impl Lobby {
     }
 
     async fn showdown(&self) {
-        let players: Vec<Player> = self.players.lock().await.to_vec();
+        let mut players = self.players.lock().await;
+        // let players: Vec<Player> = self.players.lock().await.to_vec();
         let players_tx = players.iter().map(|p| p.tx.clone()).collect::<Vec<_>>();
         let mut winning_players: Vec<Player> = Vec::new(); // keeps track of winning players at the end, accounting for draws
         let mut winning_players_names: Vec<String> = Vec::new();
         let mut winning_hand = (0, 0, 0, 0, 0, 0); // keeps track of current highest hand, could change when incrementing between players
-        for player in players {
+        let mut winning_players_indices: Vec<i32> = Vec::new();
+        for player in players.iter_mut() {
             if player.state == FOLDED {
                 continue;
             };
@@ -705,6 +709,7 @@ impl Lobby {
                 winning_players_names.clear();
                 winning_players.push(player.clone());
                 winning_players_names.push(player.name.clone());
+                winning_players_indices.clear();
             } else if player_hand_type.0 == winning_hand.0 && player_hand_type.1 == winning_hand.1 {
                 winning_players.push(player.clone());
                 winning_players_names.push(player.name.clone());
@@ -712,9 +717,15 @@ impl Lobby {
         }
         let winning_player_count = winning_players.len();
         let pot_share = self.pot / winning_player_count as i32;
-        for player in winning_players {
-            let mut player = player.clone();
-            player.wallet += pot_share;
+        for i in 0..winning_player_count {
+            for j in 0..players.len() {
+                if players[j].name == winning_players[i].name {
+                    players[j].games_won += 1;
+                    players[j].wallet += pot_share;
+                    println!("Player {} wins {}!", players[j].name, pot_share);
+                    println!("Player {} wallet: {}", players[j].name, players[j].wallet);
+                }
+            }
         }
         let winner_names = winning_players_names.join(", ");
         self.lobby_wide_send(players_tx, format!("Winner: {}", winner_names)).await;
@@ -779,15 +790,10 @@ impl Lobby {
         // update the database with the new player stats
         let players = self.players.lock().await;
         for player in players.iter() {
-            // let query = "UPDATE players SET games_played = ?, games_won = ?, wallet = ? WHERE name = ?";
-            // sqlx::query(query)
-            //     .bind(player.games_played)
-            //     .bind(player.games_won)
-            //     .bind(player.wallet)
-            //     .bind(&player.name)
-            //     .execute(&self.game_db)
-            //     .await
-            //     .unwrap();
+            println!("Updating player: {}", player.name);
+            println!("games played: {}", player.games_played);
+            println!("games won: {}", player.games_won);
+            println!("wallet: {}", player.wallet);
             sqlx::query(
                 "UPDATE players SET games_played = games_played + ?1, games_won = games_won + ?2, wallet = ?3 WHERE name = ?4",
             )
@@ -870,6 +876,7 @@ impl Lobby {
                     self.game_state = UPDATE_DB;
                 }
                 UPDATE_DB => {
+                    self.pot = 0;
                     self.update_db().await;
                     break;
                }
