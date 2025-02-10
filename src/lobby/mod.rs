@@ -273,13 +273,6 @@ impl Lobby {
         message
     }
 
-    // pub async fn broadcast(&self, message: String) {
-    //     let players = self.players.lock().await;
-    //     for player in players.iter() {
-    //         let _ = player.tx.send(Message::text(message.clone()));
-    //     }
-    // }
-
     pub async fn broadcast(&self, message: String) {
         println!("Broadcasting: {}", message);
         let players = self.players.lock().await;
