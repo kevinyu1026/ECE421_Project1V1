@@ -789,13 +789,18 @@ impl Lobby {
         // let players = self.players;
         let mut message: String;
         let mut index = 0;
+        let mut count = 1;
         for tx in players_tx.iter().cloned() {
             let mut translated_cards: String = Default::default();
             for card in players_hands[index].iter().cloned() {
+                // create a string like "count. "
+                translated_cards.push_str(&format!("{}. ", count));
                 translated_cards.push_str(&self.translate_card(card.clone()).await);
-                translated_cards.push_str(", ");
+                translated_cards.push_str("\n");
+                count += 1;
             }
-            message = format!("Your hand: {}", translated_cards.trim_end_matches(", "));
+            count = 1;
+            message = format!("Your hand:\n{}", translated_cards.trim_end_matches(", "));
             let _ = tx.send(Message::text(message.clone()));
             index += 1;
         }
