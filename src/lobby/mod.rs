@@ -1,4 +1,12 @@
 //! This module contains the definitions for the Lobby and Player structs, as well as the implementation of the game state machine.
+//! 
+//! The Lobby struct represents a game lobby, which can contain multiple players. It manages the game state and player interactions.
+//! 
+//! The Player struct represents a player in the game. It contains the player's name, hand, wallet balance, and other attributes.
+//! 
+//! The game state machine is implemented as a series of async functions that handle the game logic, such as dealing cards, betting rounds, and showdowns.
+//! 
+//! The game state machine is driven by player input, which is received via WebSocket messages. The game state machine processes the input and sends messages back to the players. 
 use super::*;
 use crate::Deck;
 use futures_util::future::{ready, Join};
@@ -335,7 +343,9 @@ impl Lobby {
         let mut players = self.players.lock().await;
         for _ in 0..5 {
             for player in players.iter_mut() {
-                player.hand.push(self.deck.deal());
+                if player.state != FOLDED {
+                    player.hand.push(self.deck.deal());
+                }
             }
         }
         // print the hands to the players
@@ -366,9 +376,14 @@ impl Lobby {
         let mut current_player_index = self.first_betting_player;
         let mut current_lobby_bet = 0; // resets to 0 every betting round
         let mut players_remaining = self.current_player_count;
-        let mut check_flag = false;
         let mut folded_count = 0;
         let mut all_folded = false;
+
+        for player in players.iter_mut() {
+            if player.state == FOLDED {
+                folded_count += 1;
+            }
+        }
 
         if round == ANTE {
             for player in players.iter_mut() {
@@ -377,21 +392,19 @@ impl Lobby {
                     self.pot += 10;
                     player.wallet -= 10;
                 } else {
-                    player.state = FOLDED;
+                    player.state = FOLDED; // these guys cant play, spectator basically
                 }
                 player.games_played += 1;
             }
             return;
         }
-        if round == FIRST_BETTING_ROUND {
-            // current_lobby_bet = 0; // first betting round starts with the ante
-            check_flag = true; // players can check if its first betting round with ante
-        }
+
         for player in players.iter_mut() {
             player.current_bet = 0; // reset all players to 0
         }
 
         while players_remaining > 0 {
+            println!("Current player index: {}", current_player_index);
             let player = &mut players[current_player_index as usize];
             if player.state == FOLDED || player.state == ALL_IN {
                 current_player_index = (current_player_index + 1) % self.current_player_count;
@@ -399,8 +412,8 @@ impl Lobby {
                 continue;
             }
             let message = format!(
-                    "Choose an option:\n1. Check\n2. Raise\n3. Call\n4. Fold\n5. All-in\n\nYour amount to call: {}\nCurrent Pot: {}",
-                    (current_lobby_bet - player.current_bet), self.pot
+                    "Choose an option:\n1. Check\n2. Raise\n3. Call\n4. Fold\n5. All-in\n\nYour amount to call: {}\nCurrent Pot: {}\nCurrent Wallet: {}",
+                    (current_lobby_bet - player.current_bet), self.pot, player.wallet
                 );
             let _ = player.tx.send(Message::text(message));
             loop {
@@ -409,7 +422,7 @@ impl Lobby {
 
                 match choice.as_str() {
                     "1" => {
-                        if current_lobby_bet == 0 || check_flag == true {
+                        if current_lobby_bet == 0 {
                             player.state = CHECKED;
                             println!("checked");
                             // self.broadcast(format!("{} has checked.", player.name)).await;
@@ -429,10 +442,11 @@ impl Lobby {
                         }
                     }
                     "2" => {
-                        if player.state == RAISED {
-                            player.tx.send(Message::text("You've already raised this round.\nCall or fold.",)).ok();
-                            continue;
-                        }
+                        // if player.state == RAISED {
+                        //     player.tx.send(Message::text("You've already raised this round.\nCall or fold.",)).ok();
+                        //     continue;
+                        // }
+
                         let bet_diff = current_lobby_bet - player.current_bet;
                         if current_lobby_bet > 0 {
                             if player.wallet <= (current_lobby_bet - player.current_bet) {player.tx.send(Message::text("Invalid move: not enough cash to raise.\nCall or fold.",)).ok();
@@ -472,7 +486,6 @@ impl Lobby {
                                     self.lobby_wide_send(players_tx.clone(),format!("{} has raised the pot to: {}",player.name, self.pot),).await;
                                     // reset the betting cycle so every player calls/raises the new max bet or folds
                                     players_remaining = self.current_player_count - 1;
-                                    check_flag = false;
                                     break;
                                 }
                             } else {
@@ -528,9 +541,6 @@ impl Lobby {
                     "5" => {
                         // all in
                         // side pots not considered yet
-                        if player.state == RAISED {player.tx.send(Message::text("You've already raised this round.\nCall or fold.",)).ok();
-                            continue;
-                        }
                         if player.wallet > 0 {
                             self.pot += player.wallet;
                             player.current_bet += player.wallet;
@@ -547,7 +557,6 @@ impl Lobby {
                             self.lobby_wide_send(players_tx.clone(),format!("{} has gone all in!", player.name),).await;
                             break;
                         }
-                        check_flag = false;
                     }
                     "Disconnect" => {
                         // self.broadcast(format!("{} has disconnected and folded.", player.name)).await;
@@ -893,7 +902,6 @@ impl Lobby {
                 }
                 UPDATE_DB => {
                     self.pot = 0;
-                    
                     self.update_db().await;
                     break;
                }
